@@ -46,6 +46,7 @@ type Config struct {
 	Http             Http       `json:"http"`
 	Api              Api        `json:"api"`
 	Midjourney       Midjourney `json:"midjourney"`
+	Gcp              Gcp        `json:"gcp"`
 	Local            Local      `json:"local"`
 	Oss              Oss        `json:"oss"`
 	RecordLogs       []string   `json:"record_logs"`
@@ -78,6 +79,10 @@ type MidjourneyProxy struct {
 	ApiSecret       string `json:"api_secret"`
 	ApiSecretHeader string `json:"api_secret_header"`
 	CdnOriginalUrl  string `json:"cdn_original_url"`
+}
+
+type Gcp struct {
+	GetTokenUrl string `json:"get_token_url" d:"https://www.googleapis.com/oauth2/v4/token"`
 }
 
 type Local struct {
