@@ -82,3 +82,12 @@ local:
   public_ip: # 获取公网IP的API接口地址, 如若配置, 调用日志中记录的本机IP将使用以下接口获取到的公网IP
 #    - https://api.ip.sb/ip
 #    - https://api64.ipify.org
+
+oss:
+    # 七牛云配置(s3兼容)
+    endpoint: s3.cn-east-1.qiniucs.com
+    region: cn-east-1
+    access_key: xxxx
+    secret_key: xxxx
+    bucket: demo
+    domain:

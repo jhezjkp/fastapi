@@ -11,11 +11,14 @@ import (
 
 func NewClient(ctx context.Context, model *model.Model, key, baseURL, path string) (sdk.Chat, error) {
 
+	oss := config.Cfg.Oss
 	if model.IsEnablePresetConfig {
-		return sdk.NewClient(ctx, GetCorpCode(ctx, model.Corp), model.Model, key, baseURL, path, &model.PresetConfig.IsSupportSystemRole, config.Cfg.Http.ProxyUrl), nil
+		return sdk.NewClient(ctx, GetCorpCode(ctx, model.Corp), model.Model, key, baseURL, path, &model.PresetConfig.IsSupportSystemRole,
+			oss.Endpoint, oss.Region, oss.AccessKey, oss.SecretKey, oss.Bucket, oss.Domain, config.Cfg.Http.ProxyUrl), nil
 	}
 
-	return sdk.NewClient(ctx, GetCorpCode(ctx, model.Corp), model.Model, key, baseURL, path, nil, config.Cfg.Http.ProxyUrl), nil
+	return sdk.NewClient(ctx, GetCorpCode(ctx, model.Corp), model.Model, key, baseURL, path, nil,
+		oss.Endpoint, oss.Region, oss.AccessKey, oss.SecretKey, oss.Bucket, oss.Domain, config.Cfg.Http.ProxyUrl), nil
 }
 
 func NewEmbeddingClient(ctx context.Context, model *model.Model, key, baseURL, path string) (*sdk.EmbeddingClient, error) {

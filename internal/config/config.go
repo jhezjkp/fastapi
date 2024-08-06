@@ -47,6 +47,7 @@ type Config struct {
 	Api              Api        `json:"api"`
 	Midjourney       Midjourney `json:"midjourney"`
 	Local            Local      `json:"local"`
+	Oss              Oss        `json:"oss"`
 	RecordLogs       []string   `json:"record_logs"`
 	Debug            bool       `json:"debug"`
 }
@@ -81,6 +82,15 @@ type MidjourneyProxy struct {
 
 type Local struct {
 	PublicIp []string `json:"public_ip"`
+}
+
+type Oss struct {
+	Endpoint  string `json:"endpoint"`
+	Region    string `json:"region"`
+	AccessKey string `json:"access_key"`
+	SecretKey string `json:"secret_key"`
+	Bucket    string `json:"bucket"`
+	Domain    string `json:"domain"`
 }
 
 func Get(ctx context.Context, pattern string, def ...interface{}) (*gvar.Var, error) {
