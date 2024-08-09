@@ -10,7 +10,7 @@ require (
 	github.com/gogf/gf/v2 v2.7.2
 	github.com/iimeta/fastapi-sdk v0.4.0
 	github.com/redis/go-redis/v9 v9.6.1
-	go.mongodb.org/mongo-driver v1.16.0
+	go.mongodb.org/mongo-driver v1.16.1
 )
 
 require (
@@ -30,7 +30,7 @@ require (
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/grokify/html-strip-tags-go v0.1.0 // indirect
-	github.com/iimeta/go-openai v0.0.0-20240730081821-64b1175d8b6d // indirect
+	github.com/iimeta/go-openai v0.0.0-20240809024851-bfbfac125988 // indirect
 	github.com/iimeta/tiktoken-go v0.0.0-20240727093849-292e86033509 // indirect
 	github.com/jmespath/go-jmespath v0.4.0 // indirect
 	github.com/klauspost/compress v1.13.6 // indirect
