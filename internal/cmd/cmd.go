@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"fmt"
 	"github.com/gogf/gf/v2/encoding/gjson"
 	"github.com/gogf/gf/v2/frame/g"
 	"github.com/gogf/gf/v2/net/ghttp"
@@ -16,6 +17,7 @@ import (
 	"github.com/iimeta/fastapi/internal/controller/midjourney"
 	"github.com/iimeta/fastapi/internal/errors"
 	"github.com/iimeta/fastapi/internal/service"
+	"github.com/iimeta/fastapi/internal/version"
 	"github.com/iimeta/fastapi/utility/logger"
 	"net/http"
 	"runtime"
@@ -23,7 +25,8 @@ import (
 )
 
 var (
-	Main = gcmd.Command{
+	versionInfo = version.Get()
+	Main        = gcmd.Command{
 		Name:  "main",
 		Usage: "main",
 		Brief: "start http server",
@@ -43,7 +46,7 @@ var (
 
 				g.Bind(
 					func(r *ghttp.Request) {
-						r.Response.WriteStatus(http.StatusOK, "Hello Fast API")
+						r.Response.WriteStatus(http.StatusOK, fmt.Sprintf("Hello Fast API\n\nbuild on: %v\ngit commit: %v\n", versionInfo.BuildDate, versionInfo.GitCommit))
 						r.Exit()
 						return
 					},
