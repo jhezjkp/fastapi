@@ -119,6 +119,7 @@ func (s *sApp) SpendQuota(ctx context.Context, appId, quota, currentQuota int) {
 		},
 	}); err != nil {
 		logger.Error(ctx, err)
+		panic(err)
 	}
 
 	app, err := s.GetCacheApp(ctx, appId)
@@ -172,6 +173,7 @@ func (s *sApp) UsedQuota(ctx context.Context, appId, quota int) {
 		},
 	}); err != nil {
 		logger.Error(ctx, err)
+		panic(err)
 	}
 }
 
@@ -420,6 +422,7 @@ func (s *sApp) AppKeySpendQuota(ctx context.Context, secretKey string, quota, cu
 		},
 	}); err != nil {
 		logger.Error(ctx, err)
+		panic(err)
 	}
 
 	key, err := s.GetCacheAppKey(ctx, secretKey)
@@ -473,6 +476,7 @@ func (s *sApp) AppKeyUsedQuota(ctx context.Context, secretKey string, quota int)
 		},
 	}); err != nil {
 		logger.Error(ctx, err)
+		panic(err)
 	}
 }
 

@@ -111,6 +111,7 @@ func (s *sUser) SpendQuota(ctx context.Context, userId, quota, currentQuota int)
 		},
 	}); err != nil {
 		logger.Error(ctx, err)
+		panic(err)
 	}
 
 	user, err := s.GetCacheUser(ctx, userId)

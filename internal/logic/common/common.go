@@ -102,12 +102,35 @@ func IsNeedRetry(err error) (isRetry bool, isDisabled bool) {
 
 	reqError := &sdkerr.RequestError{}
 	if errors.As(err, &reqError) {
+
+		switch reqError.HttpStatusCode {
+		case 403:
+			if gstr.Contains(reqError.Error(), "PERMISSION_DENIED") {
+				return true, true
+			}
+		}
+
 		return true, false
 	}
 
 	opError := &net.OpError{}
 	if errors.As(err, &opError) {
 		return true, false
+	}
+
+	// gcp-claude
+	if gstr.Contains(err.Error(), "PERMISSION_DENIED") {
+		return true, true
+	}
+
+	// gcp-claude
+	if gstr.Contains(err.Error(), "is not allowed to use Publisher Model") {
+		return true, true
+	}
+
+	// gemini
+	if gstr.Contains(err.Error(), "RESOURCE_EXHAUSTED") {
+		return true, true
 	}
 
 	// todo
