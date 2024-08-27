@@ -83,6 +83,31 @@ func IsNeedRetry(err error) (isRetry bool, isDisabled bool) {
 		return false, false
 	}
 
+	// openai
+	if gstr.Contains(err.Error(), "The OpenAI account associated with this API key has been deactivated.") {
+		return true, true
+	}
+
+	// gcp-claude
+	if gstr.Contains(err.Error(), "PERMISSION_DENIED") {
+		return true, true
+	}
+
+	// gcp-claude
+	if gstr.Contains(err.Error(), "BILLING_DISABLED") {
+		return true, true
+	}
+
+	// gcp-claude
+	if gstr.Contains(err.Error(), "is not allowed to use Publisher Model") {
+		return true, true
+	}
+
+	// gemini
+	if gstr.Contains(err.Error(), "Resource has been exhausted") {
+		return true, true
+	}
+
 	apiError := &sdkerr.ApiError{}
 	if errors.As(err, &apiError) {
 
@@ -102,35 +127,12 @@ func IsNeedRetry(err error) (isRetry bool, isDisabled bool) {
 
 	reqError := &sdkerr.RequestError{}
 	if errors.As(err, &reqError) {
-
-		switch reqError.HttpStatusCode {
-		case 403:
-			if gstr.Contains(reqError.Error(), "PERMISSION_DENIED") {
-				return true, true
-			}
-		}
-
 		return true, false
 	}
 
 	opError := &net.OpError{}
 	if errors.As(err, &opError) {
 		return true, false
-	}
-
-	// gcp-claude
-	if gstr.Contains(err.Error(), "PERMISSION_DENIED") {
-		return true, true
-	}
-
-	// gcp-claude
-	if gstr.Contains(err.Error(), "is not allowed to use Publisher Model") {
-		return true, true
-	}
-
-	// gemini
-	if gstr.Contains(err.Error(), "RESOURCE_EXHAUSTED") {
-		return true, true
 	}
 
 	// todo

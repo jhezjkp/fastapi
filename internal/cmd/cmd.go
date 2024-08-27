@@ -9,6 +9,7 @@ import (
 	"github.com/gogf/gf/v2/os/gcmd"
 	"github.com/gogf/gf/v2/text/gstr"
 	"github.com/iimeta/fastapi/internal/config"
+	"github.com/iimeta/fastapi/internal/controller/audio"
 	"github.com/iimeta/fastapi/internal/controller/chat"
 	"github.com/iimeta/fastapi/internal/controller/dashboard"
 	"github.com/iimeta/fastapi/internal/controller/embedding"
@@ -66,6 +67,12 @@ var (
 					)
 				})
 
+				v1.Group("/dashboard", func(g *ghttp.RouterGroup) {
+					g.Bind(
+						dashboard.NewV1(),
+					)
+				})
+
 				v1.Group("/chat", func(g *ghttp.RouterGroup) {
 					g.Bind(
 						chat.NewV1(),
@@ -78,9 +85,9 @@ var (
 					)
 				})
 
-				v1.Group("/dashboard", func(g *ghttp.RouterGroup) {
+				v1.Group("/audio", func(g *ghttp.RouterGroup) {
 					g.Bind(
-						dashboard.NewV1(),
+						audio.NewV1(),
 					)
 				})
 			})

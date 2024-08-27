@@ -9,7 +9,7 @@ import (
 	"github.com/iimeta/fastapi/utility/logger"
 )
 
-func NewClient(ctx context.Context, model *model.Model, key, baseURL, path string) (sdk.Chat, error) {
+func NewClient(ctx context.Context, model *model.Model, key, baseURL, path string) (sdk.Client, error) {
 
 	oss := config.Cfg.Oss
 	if model.IsEnablePresetConfig {

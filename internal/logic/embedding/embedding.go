@@ -38,7 +38,7 @@ func (s *sEmbedding) Embeddings(ctx context.Context, params sdkm.EmbeddingReques
 
 	now := gtime.TimestampMilli()
 	defer func() {
-		logger.Debugf(ctx, "sChat Embeddings time: %d", gtime.TimestampMilli()-now)
+		logger.Debugf(ctx, "sEmbedding Embeddings time: %d", gtime.TimestampMilli()-now)
 	}()
 
 	var (
