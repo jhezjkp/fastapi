@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-var localIp = gipv4.MustGetIntranetIp()
+var localIp = "127.0.0.1"
 
 func init() {
 
@@ -29,6 +29,7 @@ func init() {
 				result := gstr.Trim(response.ReadAllString())
 				if result != "" && gipv4.Validate(result) {
 					localIp = result
+					logger.Infof(ctx, "PUBLIC_IP: %s", localIp)
 					_ = response.Close()
 					break
 				}
@@ -36,6 +37,17 @@ func init() {
 				_ = response.Close()
 			}
 		}
+	} else {
+		// get intranet ip
+		defer func() {
+			if r := recover(); r != nil {
+				// handle the panic error
+				logger.Errorf(ctx, "Error while getting intranet ip: %v", r)
+			}
+		}()
+
+		// call the method that may panic
+		localIp = gipv4.MustGetIntranetIp()
 	}
 
 	logger.Infof(ctx, "LOCAL_IP: %s", localIp)
