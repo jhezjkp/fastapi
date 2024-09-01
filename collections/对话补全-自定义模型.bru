@@ -16,11 +16,11 @@ headers {
 
 body:json {
   {
-    "model": "Llama3-Chinese-8B-Instruct",
+    "model": "model-k",
     "stream": false,
     "messages": [
       {
-        "role": "system",
+        "role": "model",
         "content": "You are a helpful assistant."
       },
       {
@@ -33,7 +33,7 @@ body:json {
 
 assert {
   res.status: eq 200
-  res.body.model: isString 
+  res.body.model: isString
   res.body.choices: length 1
   res.body.choices[0].message.content: contains 直径
 }

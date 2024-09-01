@@ -13,3 +13,7 @@ get {
 headers {
   Authorization: Bearer {{apiToken}}
 }
+
+assert {
+  res.status: eq 200
+}

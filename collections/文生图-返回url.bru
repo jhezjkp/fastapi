@@ -5,7 +5,7 @@ meta {
 }
 
 post {
-  url: {{baseUrl}}/v1/chat/completions
+  url: {{baseUrl}}/v1/images/generations
   body: json
   auth: none
 }
@@ -16,24 +16,14 @@ headers {
 
 body:json {
   {
-    "model": "model-k",
-    "stream": false,
-    "messages": [
-      {
-        "role": "model",
-        "content": "You are a helpful assistant."
-      },
-      {
-        "role": "user",
-        "content": "地球直径多少？"
-      }
-    ]
+    "prompt": "a boy, hand draw, line art",
+    "n": 1,
+    "model": "FLUX.1-schnell",
+    "size": "1024x1024"
   }
 }
 
 assert {
   res.status: eq 200
-  res.body.model: isString
-  res.body.choices: length 1
-  res.body.choices[0].message.content: contains 直径
+  res.body.data[0].url: isString
 }
