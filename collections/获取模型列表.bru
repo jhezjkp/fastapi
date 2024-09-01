@@ -1,0 +1,15 @@
+meta {
+  name: 获取模型列表
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{baseUrl}}/v1/models
+  body: none
+  auth: none
+}
+
+headers {
+  Authorization: Bearer {{apiToken}}
+}

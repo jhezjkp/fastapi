@@ -1,0 +1,39 @@
+meta {
+  name: 文生图-返回url
+  type: http
+  seq: 5
+}
+
+post {
+  url: {{baseUrl}}/v1/chat/completions
+  body: json
+  auth: none
+}
+
+headers {
+  Authorization: Bearer {{apiToken}}
+}
+
+body:json {
+  {
+    "model": "model-k",
+    "stream": false,
+    "messages": [
+      {
+        "role": "model",
+        "content": "You are a helpful assistant."
+      },
+      {
+        "role": "user",
+        "content": "地球直径多少？"
+      }
+    ]
+  }
+}
+
+assert {
+  res.status: eq 200
+  res.body.model: isString
+  res.body.choices: length 1
+  res.body.choices[0].message.content: contains 直径
+}
