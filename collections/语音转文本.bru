@@ -1,0 +1,36 @@
+meta {
+  name: 语音转文本
+  type: http
+  seq: 9
+}
+
+post {
+  url: {{baseUrl}}/v1/audio/transcriptions
+  body: multipartForm
+  auth: none
+}
+
+headers {
+  Authorization: Bearer {{apiToken}}
+}
+
+body:json {
+  {
+    "input": "起床啦，一宁，要上园园啦",
+    "speed": 0.8,
+    "model": "Melo TTS"
+  }
+}
+
+body:multipart-form {
+  language: en
+  model: whisper-large-v3
+  prompt: a public speech
+  temperature: 0.0
+  File: @file(/Users/vivia/workspace/whisper.cpp/samples/jfk.mp3)
+}
+
+assert {
+  res.status: eq 200
+  res.body.text: contains And so my fellow Americans, ask not what your country can do for you, ask what you can do for your country
+}
