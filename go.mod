@@ -11,6 +11,7 @@ require (
 	github.com/gogf/gf/v2 v2.7.2
 	github.com/iimeta/fastapi-sdk v0.4.0
 	github.com/redis/go-redis/v9 v9.6.1
+	github.com/tcolgate/mp3 v0.0.0-20170426193717-e79c5a46d300
 	github.com/tjfoc/gmsm v1.4.1
 	go.mongodb.org/mongo-driver v1.16.1
 	google.golang.org/api v0.194.0
@@ -24,10 +25,10 @@ require (
 	github.com/aws/aws-sdk-go v1.55.5 // indirect
 	github.com/aws/aws-sdk-go-v2 v1.30.4 // indirect
 	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.6.4 // indirect
-	github.com/aws/aws-sdk-go-v2/credentials v1.17.29 // indirect
+	github.com/aws/aws-sdk-go-v2/credentials v1.17.30 // indirect
 	github.com/aws/aws-sdk-go-v2/internal/configsources v1.3.16 // indirect
 	github.com/aws/aws-sdk-go-v2/internal/endpoints/v2 v2.6.16 // indirect
-	github.com/aws/aws-sdk-go-v2/service/bedrockruntime v1.15.1 // indirect
+	github.com/aws/aws-sdk-go-v2/service/bedrockruntime v1.16.0 // indirect
 	github.com/aws/smithy-go v1.20.4 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/clbanning/mxj/v2 v2.7.0 // indirect
@@ -48,7 +49,7 @@ require (
 	github.com/googleapis/gax-go/v2 v2.13.0 // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/grokify/html-strip-tags-go v0.1.0 // indirect
-	github.com/iimeta/go-openai v0.0.0-20240809024851-bfbfac125988 // indirect
+	github.com/iimeta/go-openai v0.0.0-20240902022429-1f264949b4d8 // indirect
 	github.com/iimeta/tiktoken-go v0.0.0-20240727093849-292e86033509 // indirect
 	github.com/jmespath/go-jmespath v0.4.0 // indirect
 	github.com/klauspost/compress v1.13.6 // indirect
