@@ -21,3 +21,6 @@ bin/*.zip
 **/config/config.yaml
 **/resource/audio/*.mp3
 /fastapi
+deploy/host.yml
+deploy/config.yaml
+deploy/fastapi

@@ -1,0 +1,14 @@
+[Unit]
+Description=FastAPI Service
+After=network.target
+
+[Service]
+Type=simple
+User=nobody
+Restart=on-failure
+RestartSec=5s
+WorkingDirectory=/app/fastapi
+ExecStart=/app/fastapi/bin/fastapi
+
+[Install]
+WantedBy=multi-user.target
