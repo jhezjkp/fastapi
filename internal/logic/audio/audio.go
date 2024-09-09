@@ -1,4 +1,4 @@
-package chat
+package audio
 
 import (
 	"context"
@@ -7,9 +7,9 @@ import (
 	"github.com/gogf/gf/v2/os/grpool"
 	"github.com/gogf/gf/v2/os/gtime"
 	"github.com/gogf/gf/v2/util/gconv"
-	sdk "github.com/iimeta/fastapi-sdk"
+	"github.com/iimeta/fastapi-sdk"
 	sdkm "github.com/iimeta/fastapi-sdk/model"
-	v1 "github.com/iimeta/fastapi/api/audio/v1"
+	"github.com/iimeta/fastapi/api/audio/v1"
 	"github.com/iimeta/fastapi/internal/dao"
 	"github.com/iimeta/fastapi/internal/errors"
 	"github.com/iimeta/fastapi/internal/logic/common"
@@ -20,6 +20,7 @@ import (
 	"github.com/iimeta/fastapi/utility/logger"
 	"github.com/iimeta/fastapi/utility/util"
 	"math"
+	"time"
 )
 
 type sAudio struct{}
@@ -96,7 +97,7 @@ func (s *sAudio) Speech(ctx context.Context, params sdkm.SpeechRequest, fallback
 				EnterTime:    enterTime,
 			}
 
-			if retryInfo == nil {
+			if retryInfo == nil && (err == nil || common.IsAborted(err)) {
 				audioRes.TotalTokens = totalTokens
 			}
 
@@ -151,7 +152,7 @@ func (s *sAudio) Speech(ctx context.Context, params sdkm.SpeechRequest, fallback
 				service.ModelAgent().RecordErrorModelAgent(ctx, realModel, modelAgent)
 
 				if errors.Is(err, errors.ERR_NO_AVAILABLE_MODEL_AGENT_KEY) {
-					service.ModelAgent().DisabledModelAgent(ctx, modelAgent)
+					service.ModelAgent().DisabledModelAgent(ctx, modelAgent, "No available model agent key")
 				}
 
 				if realModel.IsEnableFallback {
@@ -221,9 +222,9 @@ func (s *sAudio) Speech(ctx context.Context, params sdkm.SpeechRequest, fallback
 		if isDisabled {
 			if err := grpool.AddWithRecover(gctx.NeverDone(ctx), func(ctx context.Context) {
 				if realModel.IsEnableModelAgent {
-					service.ModelAgent().DisabledModelAgentKey(ctx, k)
+					service.ModelAgent().DisabledModelAgentKey(ctx, k, err.Error())
 				} else {
-					service.Key().DisabledModelKey(ctx, k)
+					service.Key().DisabledModelKey(ctx, k, err.Error())
 				}
 			}, nil); err != nil {
 				logger.Error(ctx, err)
@@ -296,6 +297,7 @@ func (s *sAudio) Transcriptions(ctx context.Context, params *v1.TranscriptionsRe
 				minute = util.Round(response.Duration/60, 2)
 			} else {
 				minute = util.Round(params.Duration/60, 2)
+				response.Duration = params.Duration
 			}
 
 			if reqModel != nil {
@@ -320,7 +322,9 @@ func (s *sAudio) Transcriptions(ctx context.Context, params *v1.TranscriptionsRe
 
 			realModel.ModelAgent = modelAgent
 
-			audioReq := &model.AudioReq{}
+			audioReq := &model.AudioReq{
+				FilePath: params.FilePath,
+			}
 
 			audioRes := &model.AudioRes{
 				Text:         response.Text,
@@ -386,7 +390,7 @@ func (s *sAudio) Transcriptions(ctx context.Context, params *v1.TranscriptionsRe
 				service.ModelAgent().RecordErrorModelAgent(ctx, realModel, modelAgent)
 
 				if errors.Is(err, errors.ERR_NO_AVAILABLE_MODEL_AGENT_KEY) {
-					service.ModelAgent().DisabledModelAgent(ctx, modelAgent)
+					service.ModelAgent().DisabledModelAgent(ctx, modelAgent, "No available model agent key")
 				}
 
 				if realModel.IsEnableFallback {
@@ -456,9 +460,9 @@ func (s *sAudio) Transcriptions(ctx context.Context, params *v1.TranscriptionsRe
 		if isDisabled {
 			if err := grpool.AddWithRecover(gctx.NeverDone(ctx), func(ctx context.Context) {
 				if realModel.IsEnableModelAgent {
-					service.ModelAgent().DisabledModelAgentKey(ctx, k)
+					service.ModelAgent().DisabledModelAgentKey(ctx, k, err.Error())
 				} else {
-					service.Key().DisabledModelKey(ctx, k)
+					service.Key().DisabledModelKey(ctx, k, err.Error())
 				}
 			}, nil); err != nil {
 				logger.Error(ctx, err)
@@ -497,7 +501,7 @@ func (s *sAudio) Transcriptions(ctx context.Context, params *v1.TranscriptionsRe
 }
 
 // 保存日志
-func (s *sAudio) SaveLog(ctx context.Context, reqModel, realModel, fallbackModel *model.Model, key *model.Key, audioReq *model.AudioReq, audioRes *model.AudioRes, retryInfo *mcommon.Retry) {
+func (s *sAudio) SaveLog(ctx context.Context, reqModel, realModel, fallbackModel *model.Model, key *model.Key, audioReq *model.AudioReq, audioRes *model.AudioRes, retryInfo *mcommon.Retry, retry ...int) {
 
 	now := gtime.TimestampMilli()
 	defer func() {
@@ -517,6 +521,7 @@ func (s *sAudio) SaveLog(ctx context.Context, reqModel, realModel, fallbackModel
 		Text:         audioRes.Text,
 		Characters:   audioRes.Characters,
 		Minute:       audioRes.Minute,
+		FilePath:     audioReq.FilePath,
 		TotalTokens:  audioRes.TotalTokens,
 		TotalTime:    audioRes.TotalTime,
 		InternalTime: audioRes.InternalTime,
@@ -593,7 +598,7 @@ func (s *sAudio) SaveLog(ctx context.Context, reqModel, realModel, fallbackModel
 			ErrMsg:     retryInfo.ErrMsg,
 		}
 
-		if audio.IsRetry && audioRes.Error == nil {
+		if audio.IsRetry {
 			audio.Status = 3
 			audio.ErrMsg = retryInfo.ErrMsg
 		}
@@ -601,6 +606,17 @@ func (s *sAudio) SaveLog(ctx context.Context, reqModel, realModel, fallbackModel
 
 	if _, err := dao.Audio.Insert(ctx, audio); err != nil {
 		logger.Error(ctx, err)
-		panic(err)
+
+		if len(retry) == 5 {
+			panic(err)
+		}
+
+		retry = append(retry, 1)
+
+		time.Sleep(time.Duration(len(retry)*5) * time.Second)
+
+		logger.Errorf(ctx, "sAudio SaveLog retry: %d", len(retry))
+
+		s.SaveLog(ctx, reqModel, realModel, fallbackModel, key, audioReq, audioRes, retryInfo, retry...)
 	}
 }

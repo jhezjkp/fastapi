@@ -21,7 +21,6 @@ import (
 	"github.com/iimeta/fastapi/internal/service"
 	"github.com/iimeta/fastapi/utility/logger"
 	"net"
-	"slices"
 	"strings"
 )
 
@@ -37,6 +36,10 @@ func New() service.ICommon {
 
 // 解析密钥
 func (s *sCommon) ParseSecretKey(ctx context.Context, secretKey string) (int, int, error) {
+
+	if !gstr.HasPrefix(secretKey, "sk-FastAPI") {
+		return 0, 0, errors.ERR_INVALID_API_KEY
+	}
 
 	secretKey = strings.TrimPrefix(secretKey, "sk-FastAPI")
 
@@ -59,14 +62,12 @@ func (s *sCommon) ParseSecretKey(ctx context.Context, secretKey string) (int, in
 func (s *sCommon) RecordError(ctx context.Context, model *model.Model, key *model.Key, modelAgent *model.ModelAgent) {
 
 	if err := grpool.AddWithRecover(gctx.NeverDone(ctx), func(ctx context.Context) {
-
 		if model.IsEnableModelAgent {
 			service.ModelAgent().RecordErrorModelAgentKey(ctx, modelAgent, key)
 			service.ModelAgent().RecordErrorModelAgent(ctx, model, modelAgent)
 		} else {
 			service.Key().RecordErrorModelKey(ctx, model, key)
 		}
-
 	}, nil); err != nil {
 		logger.Error(ctx, err)
 	}
@@ -85,8 +86,10 @@ func IsNeedRetry(err error) (isRetry bool, isDisabled bool) {
 	}
 
 	// 自动禁用配置
-	if slices.Contains(config.Cfg.Error.AutoDisabled, err.Error()) {
-		return true, true
+	for _, autoDisabledError := range config.Cfg.Error.AutoDisabled {
+		if gstr.Contains(err.Error(), autoDisabledError) {
+			return true, true
+		}
 	}
 
 	apiError := &sdkerr.ApiError{}
