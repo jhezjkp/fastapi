@@ -20,16 +20,12 @@ func init() {
 
 		for _, url := range config.Cfg.Local.PublicIp {
 
-			client := g.Client().Timeout(config.Cfg.Http.Timeout * time.Second)
-
-			response, _ := client.Get(ctx, url)
-
+			response, _ := g.Client().Timeout(config.Cfg.Http.Timeout*time.Second).Get(ctx, url)
 			if response != nil {
 
 				result := gstr.Trim(response.ReadAllString())
 				if result != "" && gipv4.Validate(result) {
 					localIp = result
-					logger.Infof(ctx, "PUBLIC_IP: %s", localIp)
 					_ = response.Close()
 					break
 				}
@@ -37,21 +33,16 @@ func init() {
 				_ = response.Close()
 			}
 		}
-	} else {
-		// get intranet ip
-		defer func() {
-			if r := recover(); r != nil {
-				// handle the panic error
-				logger.Errorf(ctx, "Error while getting intranet ip: %v", r)
-			}
-		}()
 
-		// call the method that may panic
-		localIp = gipv4.MustGetIntranetIp()
+	} else {
+		if ip, err := gipv4.GetIntranetIp(); err != nil {
+			logger.Error(ctx, err)
+		} else {
+			localIp = ip
+		}
 	}
 
 	logger.Infof(ctx, "LOCAL_IP: %s", localIp)
-
 }
 
 func GetLocalIp() string {

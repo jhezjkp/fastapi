@@ -8,7 +8,7 @@ import (
 	"github.com/gogf/gf/v2/os/grpool"
 	"github.com/gogf/gf/v2/os/gtime"
 	"github.com/gogf/gf/v2/text/gstr"
-	sdk "github.com/iimeta/fastapi-sdk"
+	"github.com/iimeta/fastapi-sdk"
 	sdkm "github.com/iimeta/fastapi-sdk/model"
 	"github.com/iimeta/fastapi/internal/dao"
 	"github.com/iimeta/fastapi/internal/errors"
@@ -19,6 +19,7 @@ import (
 	"github.com/iimeta/fastapi/internal/service"
 	"github.com/iimeta/fastapi/utility/logger"
 	"github.com/iimeta/fastapi/utility/util"
+	"time"
 )
 
 type sImage struct{}
@@ -62,42 +63,37 @@ func (s *sImage) Generations(ctx context.Context, params sdkm.ImageRequest, fall
 			TotalTokens: imageQuota.FixedQuota * len(response.Data),
 		}
 
-		if err := grpool.AddWithRecover(gctx.NeverDone(ctx), func(ctx context.Context) {
-
-			if retryInfo == nil && err == nil {
-				if err := grpool.AddWithRecover(ctx, func(ctx context.Context) {
-					if err := service.Common().RecordUsage(ctx, usage.TotalTokens, k.Key); err != nil {
-						logger.Error(ctx, err)
-					}
-				}, nil); err != nil {
+		if retryInfo == nil && (err == nil || common.IsAborted(err)) {
+			if err := grpool.Add(gctx.NeverDone(ctx), func(ctx context.Context) {
+				if err := service.Common().RecordUsage(ctx, usage.TotalTokens, k.Key); err != nil {
 					logger.Error(ctx, err)
+					panic(err)
 				}
-			}
-
-			if err := grpool.AddWithRecover(ctx, func(ctx context.Context) {
-
-				realModel.ModelAgent = modelAgent
-
-				imageRes := &model.ImageRes{
-					Created:      response.Created,
-					Data:         response.Data,
-					TotalTime:    response.TotalTime,
-					Error:        err,
-					InternalTime: internalTime,
-					EnterTime:    enterTime,
-				}
-
-				if retryInfo == nil && err == nil {
-					imageRes.Usage = *usage
-				}
-
-				s.SaveLog(ctx, reqModel, realModel, fallbackModel, k, &params, imageRes, retryInfo)
-
-			}, nil); err != nil {
+			}); err != nil {
 				logger.Error(ctx, err)
 			}
+		}
 
-		}, nil); err != nil {
+		if err := grpool.Add(gctx.NeverDone(ctx), func(ctx context.Context) {
+
+			realModel.ModelAgent = modelAgent
+
+			imageRes := &model.ImageRes{
+				Created:      response.Created,
+				Data:         response.Data,
+				TotalTime:    response.TotalTime,
+				Error:        err,
+				InternalTime: internalTime,
+				EnterTime:    enterTime,
+			}
+
+			if retryInfo == nil && (err == nil || common.IsAborted(err)) {
+				imageRes.Usage = *usage
+			}
+
+			s.SaveLog(ctx, reqModel, realModel, fallbackModel, k, &params, imageRes, retryInfo)
+
+		}); err != nil {
 			logger.Error(ctx, err)
 		}
 	}()
@@ -146,7 +142,7 @@ func (s *sImage) Generations(ctx context.Context, params sdkm.ImageRequest, fall
 				service.ModelAgent().RecordErrorModelAgent(ctx, realModel, modelAgent)
 
 				if errors.Is(err, errors.ERR_NO_AVAILABLE_MODEL_AGENT_KEY) {
-					service.ModelAgent().DisabledModelAgent(ctx, modelAgent)
+					service.ModelAgent().DisabledModelAgent(ctx, modelAgent, "No available model agent key")
 				}
 
 				if realModel.IsEnableFallback {
@@ -223,9 +219,9 @@ func (s *sImage) Generations(ctx context.Context, params sdkm.ImageRequest, fall
 		if isDisabled {
 			if err := grpool.AddWithRecover(gctx.NeverDone(ctx), func(ctx context.Context) {
 				if realModel.IsEnableModelAgent {
-					service.ModelAgent().DisabledModelAgentKey(ctx, k)
+					service.ModelAgent().DisabledModelAgentKey(ctx, k, err.Error())
 				} else {
-					service.Key().DisabledModelKey(ctx, k)
+					service.Key().DisabledModelKey(ctx, k, err.Error())
 				}
 			}, nil); err != nil {
 				logger.Error(ctx, err)
@@ -264,7 +260,7 @@ func (s *sImage) Generations(ctx context.Context, params sdkm.ImageRequest, fall
 }
 
 // 保存日志
-func (s *sImage) SaveLog(ctx context.Context, reqModel, realModel, fallbackModel *model.Model, key *model.Key, imageReq *sdkm.ImageRequest, imageRes *model.ImageRes, retryInfo *mcommon.Retry) {
+func (s *sImage) SaveLog(ctx context.Context, reqModel, realModel, fallbackModel *model.Model, key *model.Key, imageReq *sdkm.ImageRequest, imageRes *model.ImageRes, retryInfo *mcommon.Retry, retry ...int) {
 
 	now := gtime.TimestampMilli()
 	defer func() {
@@ -272,7 +268,7 @@ func (s *sImage) SaveLog(ctx context.Context, reqModel, realModel, fallbackModel
 	}()
 
 	// 不记录此错误日志
-	if imageRes.Error != nil && errors.Is(imageRes.Error, errors.ERR_MODEL_NOT_FOUND) {
+	if imageRes.Error != nil && (errors.Is(imageRes.Error, errors.ERR_MODEL_NOT_FOUND) || errors.Is(imageRes.Error, errors.ERR_MODEL_DISABLED)) {
 		return
 	}
 
@@ -370,7 +366,7 @@ func (s *sImage) SaveLog(ctx context.Context, reqModel, realModel, fallbackModel
 			ErrMsg:     retryInfo.ErrMsg,
 		}
 
-		if image.IsRetry && imageRes.Error == nil {
+		if image.IsRetry {
 			image.Status = 3
 			image.ErrMsg = retryInfo.ErrMsg
 		}
@@ -378,5 +374,17 @@ func (s *sImage) SaveLog(ctx context.Context, reqModel, realModel, fallbackModel
 
 	if _, err := dao.Image.Insert(ctx, image); err != nil {
 		logger.Error(ctx, err)
+
+		if len(retry) == 5 {
+			panic(err)
+		}
+
+		retry = append(retry, 1)
+
+		time.Sleep(time.Duration(len(retry)*5) * time.Second)
+
+		logger.Errorf(ctx, "sImage SaveLog retry: %d", len(retry))
+
+		s.SaveLog(ctx, reqModel, realModel, fallbackModel, key, imageReq, imageRes, retryInfo, retry...)
 	}
 }

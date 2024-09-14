@@ -10,7 +10,7 @@ import (
 	"github.com/gogf/gf/v2/os/gtime"
 	"github.com/gogf/gf/v2/text/gstr"
 	"github.com/gogf/gf/v2/util/gconv"
-	sdk "github.com/iimeta/fastapi-sdk"
+	"github.com/iimeta/fastapi-sdk"
 	sdkm "github.com/iimeta/fastapi-sdk/model"
 	"github.com/iimeta/fastapi/internal/config"
 	"github.com/iimeta/fastapi/internal/consts"
@@ -23,9 +23,11 @@ import (
 	"github.com/iimeta/fastapi/internal/service"
 	"github.com/iimeta/fastapi/utility/logger"
 	"github.com/iimeta/fastapi/utility/util"
+	"github.com/iimeta/tiktoken-go"
 	"io"
 	"math"
 	"slices"
+	"time"
 )
 
 type sChat struct{}
@@ -82,9 +84,7 @@ func (s *sChat) Completions(ctx context.Context, params sdkm.ChatCompletionReque
 			response.Model = reqModel.Model
 			model := reqModel.Model
 
-			if common.GetCorpCode(ctx, reqModel.Corp) != consts.CORP_OPENAI && common.GetCorpCode(ctx, reqModel.Corp) != consts.CORP_AZURE {
-				model = consts.DEFAULT_MODEL
-			} else if !gstr.HasPrefix(model, consts.GPT_PREFIX) {
+			if !tiktoken.IsEncodingForModel(model) {
 				model = consts.DEFAULT_MODEL
 			}
 
@@ -170,7 +170,7 @@ func (s *sChat) Completions(ctx context.Context, params sdkm.ChatCompletionReque
 				completionsRes.Completion = gconv.String(response.Choices[0].Message.Content)
 			}
 
-			s.SaveLog(ctx, reqModel, realModel, fallbackModel, k, &params, completionsRes, retryInfo)
+			s.SaveLog(ctx, reqModel, realModel, fallbackModel, k, &params, completionsRes, retryInfo, false)
 
 		}); err != nil {
 			logger.Error(ctx, err)
@@ -227,7 +227,7 @@ func (s *sChat) Completions(ctx context.Context, params sdkm.ChatCompletionReque
 				service.ModelAgent().RecordErrorModelAgent(ctx, realModel, modelAgent)
 
 				if errors.Is(err, errors.ERR_NO_AVAILABLE_MODEL_AGENT_KEY) {
-					service.ModelAgent().DisabledModelAgent(ctx, modelAgent)
+					service.ModelAgent().DisabledModelAgent(ctx, modelAgent, "No available model agent key")
 				}
 
 				if realModel.IsEnableFallback {
@@ -285,9 +285,9 @@ func (s *sChat) Completions(ctx context.Context, params sdkm.ChatCompletionReque
 			if isDisabled {
 				if err := grpool.AddWithRecover(gctx.NeverDone(ctx), func(ctx context.Context) {
 					if realModel.IsEnableModelAgent {
-						service.ModelAgent().DisabledModelAgentKey(ctx, k)
+						service.ModelAgent().DisabledModelAgentKey(ctx, k, err.Error())
 					} else {
-						service.Key().DisabledModelKey(ctx, k)
+						service.Key().DisabledModelKey(ctx, k, err.Error())
 					}
 				}, nil); err != nil {
 					logger.Error(ctx, err)
@@ -385,9 +385,9 @@ func (s *sChat) Completions(ctx context.Context, params sdkm.ChatCompletionReque
 		if isDisabled {
 			if err := grpool.AddWithRecover(gctx.NeverDone(ctx), func(ctx context.Context) {
 				if realModel.IsEnableModelAgent {
-					service.ModelAgent().DisabledModelAgentKey(ctx, k)
+					service.ModelAgent().DisabledModelAgentKey(ctx, k, err.Error())
 				} else {
-					service.Key().DisabledModelKey(ctx, k)
+					service.Key().DisabledModelKey(ctx, k, err.Error())
 				}
 			}, nil); err != nil {
 				logger.Error(ctx, err)
@@ -475,10 +475,7 @@ func (s *sChat) CompletionsStream(ctx context.Context, params sdkm.ChatCompletio
 				}
 
 				model := reqModel.Model
-
-				if common.GetCorpCode(ctx, reqModel.Corp) != consts.CORP_OPENAI && common.GetCorpCode(ctx, reqModel.Corp) != consts.CORP_AZURE {
-					model = consts.DEFAULT_MODEL
-				} else if !gstr.HasPrefix(model, consts.GPT_PREFIX) {
+				if !tiktoken.IsEncodingForModel(model) {
 					model = consts.DEFAULT_MODEL
 				}
 
@@ -554,7 +551,7 @@ func (s *sChat) CompletionsStream(ctx context.Context, params sdkm.ChatCompletio
 					completionsRes.Usage.TotalTokens = totalTokens
 				}
 
-				s.SaveLog(ctx, reqModel, realModel, fallbackModel, k, &params, completionsRes, retryInfo)
+				s.SaveLog(ctx, reqModel, realModel, fallbackModel, k, &params, completionsRes, retryInfo, false)
 
 			}); err != nil {
 				logger.Error(ctx, err)
@@ -616,7 +613,7 @@ func (s *sChat) CompletionsStream(ctx context.Context, params sdkm.ChatCompletio
 				service.ModelAgent().RecordErrorModelAgent(ctx, realModel, modelAgent)
 
 				if errors.Is(err, errors.ERR_NO_AVAILABLE_MODEL_AGENT_KEY) {
-					service.ModelAgent().DisabledModelAgent(ctx, modelAgent)
+					service.ModelAgent().DisabledModelAgent(ctx, modelAgent, "No available model agent key")
 				}
 
 				if realModel.IsEnableFallback {
@@ -674,9 +671,9 @@ func (s *sChat) CompletionsStream(ctx context.Context, params sdkm.ChatCompletio
 			if isDisabled {
 				if err := grpool.AddWithRecover(gctx.NeverDone(ctx), func(ctx context.Context) {
 					if realModel.IsEnableModelAgent {
-						service.ModelAgent().DisabledModelAgentKey(ctx, k)
+						service.ModelAgent().DisabledModelAgentKey(ctx, k, err.Error())
 					} else {
-						service.Key().DisabledModelKey(ctx, k)
+						service.Key().DisabledModelKey(ctx, k, err.Error())
 					}
 				}, nil); err != nil {
 					logger.Error(ctx, err)
@@ -761,9 +758,9 @@ func (s *sChat) CompletionsStream(ctx context.Context, params sdkm.ChatCompletio
 		if isDisabled {
 			if err := grpool.AddWithRecover(gctx.NeverDone(ctx), func(ctx context.Context) {
 				if realModel.IsEnableModelAgent {
-					service.ModelAgent().DisabledModelAgentKey(ctx, k)
+					service.ModelAgent().DisabledModelAgentKey(ctx, k, err.Error())
 				} else {
-					service.Key().DisabledModelKey(ctx, k)
+					service.Key().DisabledModelKey(ctx, k, err.Error())
 				}
 			}, nil); err != nil {
 				logger.Error(ctx, err)
@@ -821,6 +818,9 @@ func (s *sChat) CompletionsStream(ctx context.Context, params sdkm.ChatCompletio
 						if response.Usage.CompletionTokens != 0 {
 							usage.CompletionTokens = response.Usage.CompletionTokens
 						}
+						if response.Usage.CompletionTokensDetails.ReasoningTokens != 0 {
+							usage.CompletionTokensDetails.ReasoningTokens = response.Usage.CompletionTokensDetails.ReasoningTokens
+						}
 						if response.Usage.TotalTokens != 0 {
 							usage.TotalTokens = response.Usage.TotalTokens
 						} else {
@@ -847,9 +847,9 @@ func (s *sChat) CompletionsStream(ctx context.Context, params sdkm.ChatCompletio
 			if isDisabled {
 				if err := grpool.AddWithRecover(gctx.NeverDone(ctx), func(ctx context.Context) {
 					if realModel.IsEnableModelAgent {
-						service.ModelAgent().DisabledModelAgentKey(ctx, k)
+						service.ModelAgent().DisabledModelAgentKey(ctx, k, err.Error())
 					} else {
-						service.Key().DisabledModelKey(ctx, k)
+						service.Key().DisabledModelKey(ctx, k, err.Error())
 					}
 				}, nil); err != nil {
 					logger.Error(ctx, err)
@@ -941,7 +941,7 @@ func (s *sChat) CompletionsStream(ctx context.Context, params sdkm.ChatCompletio
 }
 
 // 保存日志
-func (s *sChat) SaveLog(ctx context.Context, reqModel, realModel, fallbackModel *model.Model, key *model.Key, completionsReq *sdkm.ChatCompletionRequest, completionsRes *model.CompletionsRes, retryInfo *mcommon.Retry, isSmartMatch ...bool) {
+func (s *sChat) SaveLog(ctx context.Context, reqModel, realModel, fallbackModel *model.Model, key *model.Key, completionsReq *sdkm.ChatCompletionRequest, completionsRes *model.CompletionsRes, retryInfo *mcommon.Retry, isSmartMatch bool, retry ...int) {
 
 	now := gtime.TimestampMilli()
 	defer func() {
@@ -949,7 +949,7 @@ func (s *sChat) SaveLog(ctx context.Context, reqModel, realModel, fallbackModel 
 	}()
 
 	// 不记录此错误日志
-	if completionsRes.Error != nil && errors.Is(completionsRes.Error, errors.ERR_MODEL_NOT_FOUND) {
+	if completionsRes.Error != nil && (errors.Is(completionsRes.Error, errors.ERR_MODEL_NOT_FOUND) || errors.Is(completionsRes.Error, errors.ERR_MODEL_DISABLED)) {
 		return
 	}
 
@@ -957,7 +957,7 @@ func (s *sChat) SaveLog(ctx context.Context, reqModel, realModel, fallbackModel 
 		TraceId:      gctx.CtxId(ctx),
 		UserId:       service.Session().GetUserId(ctx),
 		AppId:        service.Session().GetAppId(ctx),
-		IsSmartMatch: len(isSmartMatch) > 0 && isSmartMatch[0],
+		IsSmartMatch: isSmartMatch,
 		Stream:       completionsReq.Stream,
 		ConnTime:     completionsRes.ConnTime,
 		Duration:     completionsRes.Duration,
@@ -1057,7 +1057,7 @@ func (s *sChat) SaveLog(ctx context.Context, reqModel, realModel, fallbackModel 
 			ErrMsg:     retryInfo.ErrMsg,
 		}
 
-		if chat.IsRetry && completionsRes.Error == nil {
+		if chat.IsRetry {
 			chat.Status = 3
 			chat.ErrMsg = retryInfo.ErrMsg
 		}
@@ -1065,6 +1065,17 @@ func (s *sChat) SaveLog(ctx context.Context, reqModel, realModel, fallbackModel 
 
 	if _, err := dao.Chat.Insert(ctx, chat); err != nil {
 		logger.Error(ctx, err)
-		panic(err)
+
+		if len(retry) == 5 {
+			panic(err)
+		}
+
+		retry = append(retry, 1)
+
+		time.Sleep(time.Duration(len(retry)*5) * time.Second)
+
+		logger.Errorf(ctx, "sChat SaveLog retry: %d", len(retry))
+
+		s.SaveLog(ctx, reqModel, realModel, fallbackModel, key, completionsReq, completionsRes, retryInfo, isSmartMatch, retry...)
 	}
 }

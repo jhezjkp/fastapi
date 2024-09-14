@@ -18,7 +18,8 @@ import (
 )
 
 type sUser struct {
-	userCache *cache.Cache // [userId]User
+	userCache      *cache.Cache // [userId]User
+	userQuotaCache *cache.Cache // [userId]Quota
 }
 
 func init() {
@@ -27,7 +28,8 @@ func init() {
 
 func New() service.IUser {
 	return &sUser{
-		userCache: cache.New(),
+		userCache:      cache.New(),
+		userQuotaCache: cache.New(),
 	}
 }
 
@@ -96,8 +98,8 @@ func (s *sUser) List(ctx context.Context) ([]*model.User, error) {
 	return items, nil
 }
 
-// 用户消费额度
-func (s *sUser) SpendQuota(ctx context.Context, userId, quota, currentQuota int) {
+// 用户花费额度
+func (s *sUser) SpendQuota(ctx context.Context, userId, spendQuota, currentQuota int) error {
 
 	now := gtime.TimestampMilli()
 	defer func() {
@@ -106,38 +108,19 @@ func (s *sUser) SpendQuota(ctx context.Context, userId, quota, currentQuota int)
 
 	if err := dao.User.UpdateOne(ctx, bson.M{"user_id": userId}, bson.M{
 		"$inc": bson.M{
-			"quota":      -quota,
-			"used_quota": quota,
+			"quota":      -spendQuota,
+			"used_quota": spendQuota,
 		},
 	}); err != nil {
 		logger.Error(ctx, err)
-		panic(err)
+		return err
 	}
 
-	user, err := s.GetCacheUser(ctx, userId)
-	if err != nil {
+	if err := s.SaveCacheUserQuota(ctx, userId, currentQuota); err != nil {
 		logger.Error(ctx, err)
 	}
 
-	if user.Quota > 0 {
-
-		if currentQuota <= 0 {
-			if result, err := dao.User.FindOne(ctx, bson.M{"user_id": userId}); err != nil {
-				user.Quota -= quota
-				logger.Error(ctx, err)
-			} else {
-				user.Quota = result.Quota
-			}
-		} else {
-			user.Quota = currentQuota
-		}
-
-		user.UsedQuota += quota
-
-		if err = s.SaveCacheUser(ctx, user); err != nil {
-			logger.Error(ctx, err)
-		}
-	}
+	return nil
 }
 
 // 保存用户信息到缓存
@@ -160,6 +143,11 @@ func (s *sUser) SaveCacheUser(ctx context.Context, user *model.User) error {
 	service.Session().SaveUser(ctx, user)
 
 	if err := s.userCache.Set(ctx, user.UserId, user, 0); err != nil {
+		logger.Error(ctx, err)
+		return err
+	}
+
+	if err := s.userQuotaCache.Set(ctx, user.UserId, user.Quota, 0); err != nil {
 		logger.Error(ctx, err)
 		return err
 	}
@@ -244,9 +232,44 @@ func (s *sUser) RemoveCacheUser(ctx context.Context, userId int) {
 		logger.Error(ctx, err)
 	}
 
+	if _, err := s.userQuotaCache.Remove(ctx, userId); err != nil {
+		logger.Error(ctx, err)
+	}
+
 	if _, err := redis.Del(ctx, fmt.Sprintf(consts.API_USER_KEY, userId)); err != nil {
 		logger.Error(ctx, err)
 	}
+}
+
+// 保存用户额度到缓存
+func (s *sUser) SaveCacheUserQuota(ctx context.Context, userId, quota int) error {
+
+	now := gtime.TimestampMilli()
+	defer func() {
+		logger.Debugf(ctx, "sUser SaveCacheUserQuota time: %d", gtime.TimestampMilli()-now)
+	}()
+
+	if err := s.userQuotaCache.Set(ctx, userId, quota, 0); err != nil {
+		logger.Error(ctx, err)
+		return err
+	}
+
+	return nil
+}
+
+// 获取缓存中的用户额度
+func (s *sUser) GetCacheUserQuota(ctx context.Context, userId int) int {
+
+	now := gtime.TimestampMilli()
+	defer func() {
+		logger.Debugf(ctx, "sUser GetCacheUserQuota time: %d", gtime.TimestampMilli()-now)
+	}()
+
+	if userQuotaValue := s.userQuotaCache.GetVal(ctx, userId); userQuotaValue != nil {
+		return userQuotaValue.(int)
+	}
+
+	return 0
 }
 
 // 变更订阅

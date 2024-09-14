@@ -23,6 +23,7 @@ import (
 	"github.com/iimeta/fastapi/utility/logger"
 	"github.com/iimeta/fastapi/utility/util"
 	"net/http"
+	"time"
 )
 
 type sMidjourney struct{}
@@ -74,44 +75,39 @@ func (s *sMidjourney) Submit(ctx context.Context, request *ghttp.Request, fallba
 			TotalTokens: midjourneyQuota.FixedQuota,
 		}
 
-		if err := grpool.AddWithRecover(gctx.NeverDone(ctx), func(ctx context.Context) {
-
-			if err == nil {
-				if err := grpool.AddWithRecover(ctx, func(ctx context.Context) {
-					if err := service.Common().RecordUsage(ctx, usage.TotalTokens, k.Key); err != nil {
-						logger.Error(ctx, err)
-					}
-				}, nil); err != nil {
+		if retryInfo == nil && (err == nil || common.IsAborted(err)) {
+			if err := grpool.Add(gctx.NeverDone(ctx), func(ctx context.Context) {
+				if err := service.Common().RecordUsage(ctx, usage.TotalTokens, k.Key); err != nil {
 					logger.Error(ctx, err)
+					panic(err)
 				}
-			}
-
-			if err := grpool.AddWithRecover(ctx, func(ctx context.Context) {
-
-				realModel.ModelAgent = modelAgent
-
-				midjourneyResponse := model.MidjourneyResponse{
-					ReqUrl:             reqUrl,
-					TaskId:             taskId,
-					Prompt:             prompt,
-					MidjourneyResponse: response,
-					TotalTime:          response.TotalTime,
-					Error:              err,
-					InternalTime:       internalTime,
-					EnterTime:          enterTime,
-				}
-
-				if err == nil {
-					midjourneyResponse.Usage = *usage
-				}
-
-				s.SaveLog(ctx, reqModel, realModel, fallbackModel, k, midjourneyResponse, retryInfo)
-
-			}, nil); err != nil {
+			}); err != nil {
 				logger.Error(ctx, err)
 			}
+		}
 
-		}, nil); err != nil {
+		if err := grpool.Add(gctx.NeverDone(ctx), func(ctx context.Context) {
+
+			realModel.ModelAgent = modelAgent
+
+			midjourneyResponse := model.MidjourneyResponse{
+				ReqUrl:             reqUrl,
+				TaskId:             taskId,
+				Prompt:             prompt,
+				MidjourneyResponse: response,
+				TotalTime:          response.TotalTime,
+				Error:              err,
+				InternalTime:       internalTime,
+				EnterTime:          enterTime,
+			}
+
+			if err == nil {
+				midjourneyResponse.Usage = *usage
+			}
+
+			s.SaveLog(ctx, reqModel, realModel, fallbackModel, k, midjourneyResponse, retryInfo)
+
+		}); err != nil {
 			logger.Error(ctx, err)
 		}
 	}()
@@ -162,7 +158,7 @@ func (s *sMidjourney) Submit(ctx context.Context, request *ghttp.Request, fallba
 				service.ModelAgent().RecordErrorModelAgent(ctx, realModel, modelAgent)
 
 				if errors.Is(err, errors.ERR_NO_AVAILABLE_MODEL_AGENT_KEY) {
-					service.ModelAgent().DisabledModelAgent(ctx, modelAgent)
+					service.ModelAgent().DisabledModelAgent(ctx, modelAgent, "No available model agent key")
 				}
 
 				if realModel.IsEnableFallback {
@@ -214,9 +210,9 @@ func (s *sMidjourney) Submit(ctx context.Context, request *ghttp.Request, fallba
 		if isDisabled {
 			if err := grpool.AddWithRecover(gctx.NeverDone(ctx), func(ctx context.Context) {
 				if realModel.IsEnableModelAgent {
-					service.ModelAgent().DisabledModelAgentKey(ctx, k)
+					service.ModelAgent().DisabledModelAgentKey(ctx, k, err.Error())
 				} else {
-					service.Key().DisabledModelKey(ctx, k)
+					service.Key().DisabledModelKey(ctx, k, err.Error())
 				}
 			}, nil); err != nil {
 				logger.Error(ctx, err)
@@ -300,43 +296,38 @@ func (s *sMidjourney) Task(ctx context.Context, request *ghttp.Request, fallback
 			TotalTokens: midjourneyQuota.FixedQuota,
 		}
 
-		if err := grpool.AddWithRecover(gctx.NeverDone(ctx), func(ctx context.Context) {
-
-			if err == nil {
-				if err := grpool.AddWithRecover(ctx, func(ctx context.Context) {
-					if err := service.Common().RecordUsage(ctx, usage.TotalTokens, k.Key); err != nil {
-						logger.Error(ctx, err)
-					}
-				}, nil); err != nil {
+		if retryInfo == nil && (err == nil || common.IsAborted(err)) {
+			if err := grpool.Add(gctx.NeverDone(ctx), func(ctx context.Context) {
+				if err := service.Common().RecordUsage(ctx, usage.TotalTokens, k.Key); err != nil {
 					logger.Error(ctx, err)
+					panic(err)
 				}
-			}
-
-			if err := grpool.AddWithRecover(ctx, func(ctx context.Context) {
-
-				realModel.ModelAgent = modelAgent
-
-				midjourneyResponse := model.MidjourneyResponse{
-					MidjourneyResponse: sdkm.MidjourneyResponse{
-						Response: []byte(fmt.Sprintf("taskId: %s\nimageUrl: %s", taskId, imageUrl)),
-					},
-					TotalTime:    response.TotalTime,
-					Error:        err,
-					InternalTime: internalTime,
-					EnterTime:    enterTime,
-				}
-
-				if err == nil {
-					midjourneyResponse.Usage = *usage
-				}
-
-				s.SaveLog(ctx, reqModel, realModel, fallbackModel, k, midjourneyResponse, retryInfo)
-
-			}, nil); err != nil {
+			}); err != nil {
 				logger.Error(ctx, err)
 			}
+		}
 
-		}, nil); err != nil {
+		if err := grpool.Add(gctx.NeverDone(ctx), func(ctx context.Context) {
+
+			realModel.ModelAgent = modelAgent
+
+			midjourneyResponse := model.MidjourneyResponse{
+				MidjourneyResponse: sdkm.MidjourneyResponse{
+					Response: []byte(fmt.Sprintf("taskId: %s\nimageUrl: %s", taskId, imageUrl)),
+				},
+				TotalTime:    response.TotalTime,
+				Error:        err,
+				InternalTime: internalTime,
+				EnterTime:    enterTime,
+			}
+
+			if retryInfo == nil && (err == nil || common.IsAborted(err)) {
+				midjourneyResponse.Usage = *usage
+			}
+
+			s.SaveLog(ctx, reqModel, realModel, fallbackModel, k, midjourneyResponse, retryInfo)
+
+		}); err != nil {
 			logger.Error(ctx, err)
 		}
 	}()
@@ -388,7 +379,7 @@ func (s *sMidjourney) Task(ctx context.Context, request *ghttp.Request, fallback
 				service.ModelAgent().RecordErrorModelAgent(ctx, realModel, modelAgent)
 
 				if errors.Is(err, errors.ERR_NO_AVAILABLE_MODEL_AGENT_KEY) {
-					service.ModelAgent().DisabledModelAgent(ctx, modelAgent)
+					service.ModelAgent().DisabledModelAgent(ctx, modelAgent, "No available model agent key")
 				}
 
 				if realModel.IsEnableFallback {
@@ -440,9 +431,9 @@ func (s *sMidjourney) Task(ctx context.Context, request *ghttp.Request, fallback
 		if isDisabled {
 			if err := grpool.AddWithRecover(gctx.NeverDone(ctx), func(ctx context.Context) {
 				if realModel.IsEnableModelAgent {
-					service.ModelAgent().DisabledModelAgentKey(ctx, k)
+					service.ModelAgent().DisabledModelAgentKey(ctx, k, err.Error())
 				} else {
-					service.Key().DisabledModelKey(ctx, k)
+					service.Key().DisabledModelKey(ctx, k, err.Error())
 				}
 			}, nil); err != nil {
 				logger.Error(ctx, err)
@@ -501,7 +492,7 @@ func (s *sMidjourney) Task(ctx context.Context, request *ghttp.Request, fallback
 }
 
 // 保存日志
-func (s *sMidjourney) SaveLog(ctx context.Context, reqModel, realModel, fallbackModel *model.Model, key *model.Key, response model.MidjourneyResponse, retryInfo *mcommon.Retry) {
+func (s *sMidjourney) SaveLog(ctx context.Context, reqModel, realModel, fallbackModel *model.Model, key *model.Key, response model.MidjourneyResponse, retryInfo *mcommon.Retry, retry ...int) {
 
 	now := gtime.TimestampMilli()
 	defer func() {
@@ -509,7 +500,7 @@ func (s *sMidjourney) SaveLog(ctx context.Context, reqModel, realModel, fallback
 	}()
 
 	// 不记录此错误日志
-	if response.Error != nil && errors.Is(response.Error, errors.ERR_MODEL_NOT_FOUND) {
+	if response.Error != nil && (errors.Is(response.Error, errors.ERR_MODEL_NOT_FOUND) || errors.Is(response.Error, errors.ERR_MODEL_DISABLED)) {
 		return
 	}
 
@@ -592,7 +583,11 @@ func (s *sMidjourney) SaveLog(ctx context.Context, reqModel, realModel, fallback
 
 	if response.Error != nil {
 		midjourney.ErrMsg = response.Error.Error()
-		midjourney.Status = -1
+		if common.IsAborted(response.Error) {
+			midjourney.Status = 2
+		} else {
+			midjourney.Status = -1
+		}
 	}
 
 	if retryInfo != nil {
@@ -604,7 +599,7 @@ func (s *sMidjourney) SaveLog(ctx context.Context, reqModel, realModel, fallback
 			ErrMsg:     retryInfo.ErrMsg,
 		}
 
-		if midjourney.IsRetry && response.Error == nil {
+		if midjourney.IsRetry {
 			midjourney.Status = 3
 			midjourney.ErrMsg = retryInfo.ErrMsg
 		}
@@ -612,5 +607,17 @@ func (s *sMidjourney) SaveLog(ctx context.Context, reqModel, realModel, fallback
 
 	if _, err := dao.Midjourney.Insert(ctx, midjourney); err != nil {
 		logger.Error(ctx, err)
+
+		if len(retry) == 5 {
+			panic(err)
+		}
+
+		retry = append(retry, 1)
+
+		time.Sleep(time.Duration(len(retry)*5) * time.Second)
+
+		logger.Errorf(ctx, "sMidjourney SaveLog retry: %d", len(retry))
+
+		s.SaveLog(ctx, reqModel, realModel, fallbackModel, key, response, retryInfo, retry...)
 	}
 }

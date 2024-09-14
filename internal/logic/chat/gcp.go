@@ -21,7 +21,6 @@ import (
 	"github.com/iimeta/fastapi/utility/redis"
 	"github.com/iimeta/fastapi/utility/util"
 	"google.golang.org/api/option"
-	"slices"
 	"time"
 )
 
@@ -70,7 +69,7 @@ func getGcpToken(ctx context.Context, key *model.Key, proxyURL string) string {
 	if getGcpTokenRes.Error != "" {
 		logger.Errorf(ctx, "getGcpToken key: %s, getGcpTokenRes.Error: %s", key.Key, getGcpTokenRes.Error)
 		if err = grpool.Add(gctx.NeverDone(ctx), func(ctx context.Context) {
-			service.Key().DisabledModelKey(ctx, key)
+			service.Key().DisabledModelKey(ctx, key, getGcpTokenRes.Error)
 		}); err != nil {
 			logger.Error(ctx, err)
 		}
@@ -153,11 +152,14 @@ func getGcpTokenNew(ctx context.Context, key *model.Key, proxyURL string) (strin
 	response, err := client.GenerateAccessToken(ctx, request)
 	if err != nil {
 		logger.Errorf(ctx, "getGcpTokenNew GenerateAccessToken key: %s, error: %v", key.Key, err)
-		if slices.Contains(config.Cfg.Error.AutoDisabled, err.Error()) {
-			if err = grpool.Add(gctx.NeverDone(ctx), func(ctx context.Context) {
-				service.Key().DisabledModelKey(ctx, key)
-			}); err != nil {
-				logger.Error(ctx, err)
+		for _, autoDisabledError := range config.Cfg.Error.AutoDisabled {
+			if gstr.Contains(err.Error(), autoDisabledError) {
+				if err := grpool.Add(gctx.NeverDone(ctx), func(ctx context.Context) {
+					service.Key().DisabledModelKey(ctx, key, err.Error())
+				}); err != nil {
+					logger.Error(ctx, err)
+				}
+				break
 			}
 		}
 		return "", "", err

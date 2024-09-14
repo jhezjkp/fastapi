@@ -7,9 +7,8 @@ import (
 	"github.com/gogf/gf/v2/os/gctx"
 	"github.com/gogf/gf/v2/os/grpool"
 	"github.com/gogf/gf/v2/os/gtime"
-	"github.com/gogf/gf/v2/text/gstr"
 	"github.com/gogf/gf/v2/util/gconv"
-	sdk "github.com/iimeta/fastapi-sdk"
+	"github.com/iimeta/fastapi-sdk"
 	sdkm "github.com/iimeta/fastapi-sdk/model"
 	"github.com/iimeta/fastapi/internal/config"
 	"github.com/iimeta/fastapi/internal/consts"
@@ -19,6 +18,7 @@ import (
 	mcommon "github.com/iimeta/fastapi/internal/model/common"
 	"github.com/iimeta/fastapi/internal/service"
 	"github.com/iimeta/fastapi/utility/logger"
+	"github.com/iimeta/tiktoken-go"
 	"math"
 )
 
@@ -55,10 +55,7 @@ func (s *sChat) SmartCompletions(ctx context.Context, params sdkm.ChatCompletion
 		if retryInfo == nil && (err == nil || common.IsAborted(err)) {
 
 			model := realModel.Model
-
-			if common.GetCorpCode(ctx, realModel.Corp) != consts.CORP_OPENAI && common.GetCorpCode(ctx, realModel.Corp) != consts.CORP_AZURE {
-				model = consts.DEFAULT_MODEL
-			} else if !gstr.HasPrefix(model, consts.GPT_PREFIX) {
+			if !tiktoken.IsEncodingForModel(model) {
 				model = consts.DEFAULT_MODEL
 			}
 
@@ -111,7 +108,7 @@ func (s *sChat) SmartCompletions(ctx context.Context, params sdkm.ChatCompletion
 			}
 		}
 
-		if err := grpool.AddWithRecover(gctx.NeverDone(ctx), func(ctx context.Context) {
+		if err := grpool.Add(gctx.NeverDone(ctx), func(ctx context.Context) {
 
 			realModel.ModelAgent = modelAgent
 
@@ -135,7 +132,7 @@ func (s *sChat) SmartCompletions(ctx context.Context, params sdkm.ChatCompletion
 
 			s.SaveLog(ctx, reqModel, realModel, fallbackModel, k, &params, completionsRes, retryInfo, true)
 
-		}, nil); err != nil {
+		}); err != nil {
 			logger.Error(ctx, err)
 		}
 	}()
@@ -185,7 +182,7 @@ func (s *sChat) SmartCompletions(ctx context.Context, params sdkm.ChatCompletion
 				service.ModelAgent().RecordErrorModelAgent(ctx, realModel, modelAgent)
 
 				if errors.Is(err, errors.ERR_NO_AVAILABLE_MODEL_AGENT_KEY) {
-					service.ModelAgent().DisabledModelAgent(ctx, modelAgent)
+					service.ModelAgent().DisabledModelAgent(ctx, modelAgent, "No available model agent key")
 				}
 
 				if realModel.IsEnableFallback {
@@ -243,9 +240,9 @@ func (s *sChat) SmartCompletions(ctx context.Context, params sdkm.ChatCompletion
 			if isDisabled {
 				if err := grpool.AddWithRecover(gctx.NeverDone(ctx), func(ctx context.Context) {
 					if realModel.IsEnableModelAgent {
-						service.ModelAgent().DisabledModelAgentKey(ctx, k)
+						service.ModelAgent().DisabledModelAgentKey(ctx, k, err.Error())
 					} else {
-						service.Key().DisabledModelKey(ctx, k)
+						service.Key().DisabledModelKey(ctx, k, err.Error())
 					}
 				}, nil); err != nil {
 					logger.Error(ctx, err)
@@ -340,9 +337,9 @@ func (s *sChat) SmartCompletions(ctx context.Context, params sdkm.ChatCompletion
 		if isDisabled {
 			if err := grpool.AddWithRecover(gctx.NeverDone(ctx), func(ctx context.Context) {
 				if realModel.IsEnableModelAgent {
-					service.ModelAgent().DisabledModelAgentKey(ctx, k)
+					service.ModelAgent().DisabledModelAgentKey(ctx, k, err.Error())
 				} else {
-					service.Key().DisabledModelKey(ctx, k)
+					service.Key().DisabledModelKey(ctx, k, err.Error())
 				}
 			}, nil); err != nil {
 				logger.Error(ctx, err)
