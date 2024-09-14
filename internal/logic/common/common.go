@@ -1,23 +1,20 @@
 package common
 
 import (
+	"bytes"
 	"context"
-	"github.com/gogf/gf/v2/encoding/gjson"
-	"github.com/gogf/gf/v2/net/ghttp"
+	"fmt"
+	"github.com/gogf/gf/v2/frame/g"
 	"github.com/gogf/gf/v2/os/gctx"
 	"github.com/gogf/gf/v2/os/grpool"
-	"github.com/gogf/gf/v2/os/gtime"
 	"github.com/gogf/gf/v2/text/gregex"
 	"github.com/gogf/gf/v2/text/gstr"
 	"github.com/gogf/gf/v2/util/gconv"
 	sdkm "github.com/iimeta/fastapi-sdk/model"
 	"github.com/iimeta/fastapi-sdk/sdkerr"
-	"github.com/iimeta/fastapi-sdk/tiktoken"
 	"github.com/iimeta/fastapi/internal/config"
-	"github.com/iimeta/fastapi/internal/consts"
 	"github.com/iimeta/fastapi/internal/errors"
 	"github.com/iimeta/fastapi/internal/model"
-	mcommon "github.com/iimeta/fastapi/internal/model/common"
 	"github.com/iimeta/fastapi/internal/service"
 	"github.com/iimeta/fastapi/utility/logger"
 	"net"
@@ -157,134 +154,104 @@ func HandleMessages(messages []sdkm.ChatCompletionMessage) []sdkm.ChatCompletion
 	return newMessages
 }
 
-func GetPromptTokens(ctx context.Context, model string, messages []sdkm.ChatCompletionMessage) int {
+func CheckIp(ctx context.Context, ipWhitelist, ipBlacklist []string) error {
 
-	promptTime := gtime.TimestampMilli()
+	clientIp := g.RequestFromCtx(ctx).GetClientIp()
 
-	promptTokens, err := tiktoken.NumTokensFromMessages(model, messages)
-	if err != nil {
-		logger.Errorf(ctx, "GetPromptTokens NumTokensFromMessages model: %s, messages: %s, error: %v", model, gjson.MustEncodeString(messages), err)
-		if promptTokens, err = tiktoken.NumTokensFromMessages(consts.DEFAULT_MODEL, messages); err != nil {
-			logger.Errorf(ctx, "GetPromptTokens NumTokensFromMessages model: %s, messages: %s, error: %v", consts.DEFAULT_MODEL, gjson.MustEncodeString(messages), err)
-		}
+	if clientIp == "127.0.0.1" || clientIp == "::1" {
+		return nil
 	}
-	logger.Debugf(ctx, "GetPromptTokens NumTokensFromMessages model: %s, len(messages): %d, promptTokens: %d, time: %d", model, len(gjson.MustEncodeString(messages)), promptTokens, gtime.TimestampMilli()-promptTime)
 
-	return promptTokens
-}
-
-func GetCompletionTokens(ctx context.Context, model, completion string) int {
-
-	completionTime := gtime.TimestampMilli()
-	completionTokens, err := tiktoken.NumTokensFromString(model, completion)
-	if err != nil {
-		logger.Errorf(ctx, "GetCompletionTokens NumTokensFromString model: %s, completion: %s, error: %v", model, completion, err)
-		if completionTokens, err = tiktoken.NumTokensFromString(consts.DEFAULT_MODEL, completion); err != nil {
-			logger.Errorf(ctx, "GetCompletionTokens NumTokensFromString model: %s, completion: %s, error: %v", consts.DEFAULT_MODEL, completion, err)
-		}
-	}
-	logger.Debugf(ctx, "GetCompletionTokens NumTokensFromString model: %s, len(completion): %d, completionTokens: %d, time: %d", model, len(completion), completionTokens, gtime.TimestampMilli()-completionTime)
-
-	return completionTokens
-}
-
-func GetImageQuota(model *model.Model, size string) (imageQuota mcommon.ImageQuota) {
-
-	var (
-		width  int
-		height int
-	)
-
-	if size != "" {
-
-		widthHeight := gstr.Split(size, `×`)
-
-		if len(widthHeight) != 2 {
-			widthHeight = gstr.Split(size, `x`)
-		}
-
-		if len(widthHeight) != 2 {
-			widthHeight = gstr.Split(size, `X`)
-		}
-
-		if len(widthHeight) != 2 {
-			widthHeight = gstr.Split(size, `*`)
-		}
-
-		if len(widthHeight) != 2 {
-			widthHeight = gstr.Split(size, `:`)
-		}
-
-		if len(widthHeight) == 2 {
-			width = gconv.Int(widthHeight[0])
-			height = gconv.Int(widthHeight[1])
+	if addrs, err := net.InterfaceAddrs(); err == nil {
+		for _, addr := range addrs {
+			// 检查是否为IP地址, 而不是其他类型的地址(例如MAC地址)
+			if ipnet, ok := addr.(*net.IPNet); ok && !ipnet.IP.IsLoopback() {
+				if ipnet.IP.To4() != nil && clientIp == ipnet.IP.String() {
+					return nil
+				}
+			}
 		}
 	}
 
-	for _, quota := range model.ImageQuotas {
+	if (len(ipBlacklist) > 0 && ipBlacklist[0] != "") || len(ipBlacklist) > 1 {
 
-		if quota.Width == width && quota.Height == height {
-			return quota
-		}
+		for _, blacklist := range ipBlacklist {
 
-		if quota.IsDefault {
-			imageQuota = quota
-		}
-	}
+			if blacklist == "" {
+				continue
+			}
 
-	return imageQuota
-}
+			if blacklist == clientIp {
+				return errors.ERR_FORBIDDEN
+			}
 
-func GetMultimodalTokens(ctx context.Context, model string, multiContent []interface{}, reqModel *model.Model) (textTokens, imageTokens int) {
+			if gstr.Contains(blacklist, "/") {
 
-	for _, value := range multiContent {
-
-		content := value.(map[string]interface{})
-
-		if content["type"] == "image_url" {
-
-			imageUrl := content["image_url"].(map[string]interface{})
-			detail := imageUrl["detail"]
-
-			var imageQuota mcommon.ImageQuota
-			for _, quota := range reqModel.MultimodalQuota.ImageQuotas {
-
-				if quota.Mode == detail {
-					imageQuota = quota
-					break
+				_, ipNet, err := net.ParseCIDR(blacklist)
+				if err != nil {
+					return err
 				}
 
-				if quota.IsDefault {
-					imageQuota = quota
+				if ipNet.Contains(net.ParseIP(clientIp)) {
+					return errors.ERR_FORBIDDEN
 				}
 			}
 
-			imageTokens += imageQuota.FixedQuota
+			if gstr.Contains(blacklist, "-") {
 
-		} else {
-			contentTime := gtime.TimestampMilli()
-			tokens, err := tiktoken.NumTokensFromString(model, gconv.String(content))
-			if err != nil {
-				logger.Errorf(ctx, "GetMultimodalQuota NumTokensFromString model: %s, content: %s, error: %v", model, gconv.String(content), err)
-				if tokens, err = tiktoken.NumTokensFromString(consts.DEFAULT_MODEL, gconv.String(content)); err != nil {
-					logger.Errorf(ctx, "GetMultimodalQuota NumTokensFromString model: %s, content: %s, error: %v", consts.DEFAULT_MODEL, gconv.String(content), err)
+				ipRange := gstr.Split(blacklist, "-")
+
+				ipStart := net.ParseIP(ipRange[0])
+				ipEnd := net.ParseIP(ipRange[1])
+				ip := net.ParseIP(clientIp)
+
+				if bytes.Compare(ip, ipStart) >= 0 && bytes.Compare(ip, ipEnd) <= 0 {
+					return errors.ERR_FORBIDDEN
 				}
 			}
-			textTokens += tokens
-			logger.Debugf(ctx, "GetMultimodalQuota NumTokensFromString model: %s, len(content): %d, tokens: %d, time: %d", model, len(gconv.String(content)), tokens, gtime.TimestampMilli()-contentTime)
 		}
 	}
 
-	return textTokens, imageTokens
-}
+	if (len(ipWhitelist) > 0 && ipWhitelist[0] != "") || len(ipWhitelist) > 1 {
 
-func GetMidjourneyQuota(model *model.Model, request *ghttp.Request, path string) (mcommon.MidjourneyQuota, error) {
+		for _, whitelist := range ipWhitelist {
 
-	for _, quota := range model.MidjourneyQuotas {
-		if quota.Path == path {
-			return quota, nil
+			if whitelist == "" {
+				continue
+			}
+
+			if whitelist == clientIp {
+				return nil
+			}
+
+			if gstr.Contains(whitelist, "/") {
+
+				_, ipNet, err := net.ParseCIDR(whitelist)
+				if err != nil {
+					return err
+				}
+
+				if ipNet.Contains(net.ParseIP(clientIp)) {
+					return nil
+				}
+			}
+
+			if gstr.Contains(whitelist, "-") {
+
+				ipRange := gstr.Split(whitelist, "-")
+
+				ipStart := net.ParseIP(ipRange[0])
+				ipEnd := net.ParseIP(ipRange[1])
+				ip := net.ParseIP(clientIp)
+
+				if bytes.Compare(ip, ipStart) >= 0 && bytes.Compare(ip, ipEnd) <= 0 {
+					return nil
+				}
+			}
 		}
+
+		return errors.NewError(403, "fastapi_error", fmt.Sprintf("IP: %s Forbidden.", g.RequestFromCtx(ctx).GetClientIp()), "fastapi_error")
 	}
 
-	return mcommon.MidjourneyQuota{}, errors.ERR_PATH_NOT_FOUND
+	return nil
 }

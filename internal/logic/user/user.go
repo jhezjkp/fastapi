@@ -147,6 +147,11 @@ func (s *sUser) SaveCacheUser(ctx context.Context, user *model.User) error {
 		return err
 	}
 
+	if err := s.userQuotaCache.Set(ctx, user.UserId, user.Quota, 0); err != nil {
+		logger.Error(ctx, err)
+		return err
+	}
+
 	return nil
 }
 
@@ -224,6 +229,10 @@ func (s *sUser) RemoveCacheUser(ctx context.Context, userId int) {
 	}()
 
 	if _, err := s.userCache.Remove(ctx, userId); err != nil {
+		logger.Error(ctx, err)
+	}
+
+	if _, err := s.userQuotaCache.Remove(ctx, userId); err != nil {
 		logger.Error(ctx, err)
 	}
 

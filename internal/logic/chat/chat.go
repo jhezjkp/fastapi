@@ -23,6 +23,7 @@ import (
 	"github.com/iimeta/fastapi/internal/service"
 	"github.com/iimeta/fastapi/utility/logger"
 	"github.com/iimeta/fastapi/utility/util"
+	"github.com/iimeta/tiktoken-go"
 	"io"
 	"math"
 	"slices"
@@ -83,9 +84,7 @@ func (s *sChat) Completions(ctx context.Context, params sdkm.ChatCompletionReque
 			response.Model = reqModel.Model
 			model := reqModel.Model
 
-			if common.GetCorpCode(ctx, reqModel.Corp) != consts.CORP_OPENAI && common.GetCorpCode(ctx, reqModel.Corp) != consts.CORP_AZURE {
-				model = consts.DEFAULT_MODEL
-			} else if !gstr.HasPrefix(model, consts.GPT_PREFIX) {
+			if !tiktoken.IsEncodingForModel(model) {
 				model = consts.DEFAULT_MODEL
 			}
 
@@ -476,10 +475,7 @@ func (s *sChat) CompletionsStream(ctx context.Context, params sdkm.ChatCompletio
 				}
 
 				model := reqModel.Model
-
-				if common.GetCorpCode(ctx, reqModel.Corp) != consts.CORP_OPENAI && common.GetCorpCode(ctx, reqModel.Corp) != consts.CORP_AZURE {
-					model = consts.DEFAULT_MODEL
-				} else if !gstr.HasPrefix(model, consts.GPT_PREFIX) {
+				if !tiktoken.IsEncodingForModel(model) {
 					model = consts.DEFAULT_MODEL
 				}
 
@@ -822,6 +818,9 @@ func (s *sChat) CompletionsStream(ctx context.Context, params sdkm.ChatCompletio
 						if response.Usage.CompletionTokens != 0 {
 							usage.CompletionTokens = response.Usage.CompletionTokens
 						}
+						if response.Usage.CompletionTokensDetails.ReasoningTokens != 0 {
+							usage.CompletionTokensDetails.ReasoningTokens = response.Usage.CompletionTokensDetails.ReasoningTokens
+						}
 						if response.Usage.TotalTokens != 0 {
 							usage.TotalTokens = response.Usage.TotalTokens
 						} else {
@@ -950,7 +949,7 @@ func (s *sChat) SaveLog(ctx context.Context, reqModel, realModel, fallbackModel 
 	}()
 
 	// 不记录此错误日志
-	if completionsRes.Error != nil && errors.Is(completionsRes.Error, errors.ERR_MODEL_NOT_FOUND) {
+	if completionsRes.Error != nil && (errors.Is(completionsRes.Error, errors.ERR_MODEL_NOT_FOUND) || errors.Is(completionsRes.Error, errors.ERR_MODEL_DISABLED)) {
 		return
 	}
 

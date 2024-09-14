@@ -5,6 +5,7 @@ import (
 	"github.com/gogf/gf/v2/frame/g"
 	"github.com/gogf/gf/v2/os/gtime"
 	"github.com/iimeta/fastapi/internal/errors"
+	"github.com/iimeta/fastapi/internal/logic/common"
 	"github.com/iimeta/fastapi/internal/service"
 	"github.com/iimeta/fastapi/utility/logger"
 )
@@ -74,6 +75,11 @@ func (s *sAuth) VerifySecretKey(ctx context.Context, secretKey string) error {
 		return err
 	}
 
+	if err = common.CheckIp(ctx, key.IpWhitelist, key.IpBlacklist); err != nil {
+		logger.Errorf(ctx, "sAuth Key CheckIp ClientIp: %s, RemoteIp: %s, err: %v", g.RequestFromCtx(ctx).GetClientIp(), g.RequestFromCtx(ctx).GetRemoteIp(), err)
+		return err
+	}
+
 	if key.IsLimitQuota && (service.App().GetCacheAppKeyQuota(ctx, key.Key) <= 0 || (key.QuotaExpiresAt != 0 && key.QuotaExpiresAt < gtime.TimestampMilli())) {
 		err = errors.ERR_INSUFFICIENT_QUOTA
 		logger.Error(ctx, err)
@@ -135,6 +141,11 @@ func (s *sAuth) VerifySecretKey(ctx context.Context, secretKey string) error {
 	if app.Status == 2 {
 		err = errors.ERR_APP_DISABLED
 		logger.Error(ctx, err)
+		return err
+	}
+
+	if err = common.CheckIp(ctx, app.IpWhitelist, app.IpBlacklist); err != nil {
+		logger.Errorf(ctx, "sAuth App CheckIp ClientIp: %s, RemoteIp: %s, err: %v", g.RequestFromCtx(ctx).GetClientIp(), g.RequestFromCtx(ctx).GetRemoteIp(), err)
 		return err
 	}
 
