@@ -25,4 +25,4 @@ bin/*.zip
 /fastapi
 deploy/host.yml
 deploy/config.yaml
-deploy/fastapi
+deploy/fastapi*

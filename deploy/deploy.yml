@@ -9,7 +9,7 @@
       - { src: "{{playbook_dir}}/config.yaml", dest: "/app/fastapi/manifest/config/", mode: '0644' }
       - { src: "{{playbook_dir}}/fastapi.service", dest: "/etc/systemd/system/", mode: '0644' }
     bin_files_to_copy:
-      - { src: "{{playbook_dir}}/fastapi", dest: "/app/fastapi/bin/", mode: '0755' }
+      - { src: "{{playbook_dir}}/fastapi.tar.gz", dest: "/app/fastapi/bin/", mode: '0755' }
     paths:
       - /app/fastapi/logs/
       - /app/fastapi/resource/
@@ -40,13 +40,15 @@
       with_items: "{{ config_files_to_copy }}"
       when: first_deploy
 
-    - name: Upload Bin Files to Remote
-      copy:
+    - name: Upload and Unzip Bin file
+      unarchive:
         src: "{{ item.src }}"
         dest: "{{ item.dest }}"
-        mode: "{{ item.mode }}"
         owner: app
         group: app
+        extra_opts:
+          - --transform
+          - s/^deploy//
       with_items: "{{ bin_files_to_copy }}"
 
     - name: Create App Running Directory

@@ -18,4 +18,6 @@ GOOS=linux GOARCH=amd64 go build -o ${target_file} -ldflags="-X 'github.com/iime
 
 chmod +x ${target_file}
 
+tar -zcvf ${target_file}.tar.gz ${target_file}
+
 echo "fastapi build complete!"
