@@ -35,7 +35,7 @@ func (c *ControllerV1) Models(ctx context.Context, req *v1.ModelsReq) (res *v1.M
 			modelsRes.Data = append(modelsRes.Data, model.DashboardModelsData{
 				Id:      m.Name,
 				Object:  "model",
-				OwnedBy: "fastapi",
+				OwnedBy: corp.Name,
 				Created: gconv.Int(m.CreatedAt / 1000),
 				FastAPI: &model.FastAPI{
 					Corp:  corp.Name,
