@@ -17,6 +17,7 @@ import (
 	"github.com/iimeta/fastapi/internal/controller/image"
 	"github.com/iimeta/fastapi/internal/controller/midjourney"
 	"github.com/iimeta/fastapi/internal/errors"
+	"github.com/iimeta/fastapi/internal/model"
 	"github.com/iimeta/fastapi/internal/service"
 	"github.com/iimeta/fastapi/utility/logger"
 	"net/http"
@@ -51,6 +52,18 @@ var (
 					},
 					health.NewV1(),
 				)
+			})
+
+			s.BindHandler("/v1/realtime", func(r *ghttp.Request) {
+				middleware(r)
+				if err := service.Realtime().Realtime(r.GetCtx(), r, model.RealtimeRequest{
+					Model: r.FormValue("model"),
+				}, nil); err != nil {
+					err := errors.Error(r.GetCtx(), err)
+					r.Response.Header().Set("Content-Type", "application/json")
+					r.Response.WriteStatus(err.Status(), gjson.MustEncodeString(err))
+					r.Exit()
+				}
 			})
 
 			s.Group("/v1", func(v1 *ghttp.RouterGroup) {
