@@ -81,7 +81,7 @@ func (s *sKey) GetModelKeys(ctx context.Context, id string) ([]*model.Key, error
 		logger.Debugf(ctx, "sKey GetModelKeys time: %d", gtime.TimestampMilli()-now)
 	}()
 
-	results, err := dao.Key.Find(ctx, bson.M{"type": 2, "is_agents_only": false, "status": 1, "models": bson.M{"$in": []string{id}}})
+	results, err := dao.Key.Find(ctx, bson.M{"type": 2, "is_agents_only": false, "models": bson.M{"$in": []string{id}}})
 	if err != nil {
 		logger.Error(ctx, err)
 		return nil, err
@@ -504,7 +504,7 @@ func (s *sKey) UpdateCacheModelKey(ctx context.Context, oldData *entity.Key, new
 
 			if k.Id != newData.Id {
 				newKeys = append(newKeys, k)
-				keyMap[key.Id] = k
+				keyMap[k.Id] = k
 			} else {
 				newKeys = append(newKeys, key)
 				keyMap[newData.Id] = key

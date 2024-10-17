@@ -17,7 +17,9 @@ import (
 	"github.com/iimeta/fastapi/internal/controller/health"
 	"github.com/iimeta/fastapi/internal/controller/image"
 	"github.com/iimeta/fastapi/internal/controller/midjourney"
+	"github.com/iimeta/fastapi/internal/controller/moderation"
 	"github.com/iimeta/fastapi/internal/errors"
+	"github.com/iimeta/fastapi/internal/model"
 	"github.com/iimeta/fastapi/internal/service"
 	"github.com/iimeta/fastapi/internal/version"
 	"github.com/iimeta/fastapi/utility/logger"
@@ -56,6 +58,18 @@ var (
 				)
 			})
 
+			s.BindHandler("/v1/realtime", func(r *ghttp.Request) {
+				middleware(r)
+				if err := service.Realtime().Realtime(r.GetCtx(), r, model.RealtimeRequest{
+					Model: r.FormValue("model"),
+				}, nil); err != nil {
+					err := errors.Error(r.GetCtx(), err)
+					r.Response.Header().Set("Content-Type", "application/json")
+					r.Response.WriteStatus(err.Status(), gjson.MustEncodeString(err))
+					r.Exit()
+				}
+			})
+
 			s.Group("/v1", func(v1 *ghttp.RouterGroup) {
 
 				v1.Middleware(middlewareHandlerResponse)
@@ -65,6 +79,7 @@ var (
 					g.Bind(
 						dashboard.NewV1(),
 						embedding.NewV1(),
+						moderation.NewV1(),
 					)
 				})
 
@@ -119,9 +134,32 @@ func beforeServeHook(r *ghttp.Request) {
 
 func middleware(r *ghttp.Request) {
 
+	logger.Debugf(r.GetCtx(), "r.Header: %v", r.Header)
+
 	secretKey := strings.TrimPrefix(r.GetHeader("Authorization"), "Bearer ")
 	if secretKey == "" {
 		secretKey = r.GetHeader(config.Cfg.Midjourney.MidjourneyProxy.ApiSecretHeader)
+	}
+
+	if secretKey == "" {
+		secretKey = r.Get("token").String()
+	}
+
+	if secretKey == "" {
+		swp := r.Header.Values("Sec-Websocket-Protocol")
+		if len(swp) > 0 {
+			values := gstr.Split(swp[0], ", ")
+			for _, value := range values {
+				if gstr.HasPrefix(value, "openai-insecure-api-key") {
+					split := gstr.Split(value, ".")
+					if len(split) == 2 {
+						secretKey = split[1]
+					} else {
+						secretKey = value
+					}
+				}
+			}
+		}
 	}
 
 	if secretKey == "" {

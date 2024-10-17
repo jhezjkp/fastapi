@@ -25,22 +25,42 @@ type DashboardModelsRes struct {
 }
 
 type DashboardModelsData struct {
-	Id      string   `json:"id"`
-	Object  string   `json:"object"`
-	OwnedBy string   `json:"owned_by"`
-	Created int      `json:"created"`
-	FastAPI *FastAPI `json:"fastapi,omitempty"`
+	Id         string       `json:"id"`
+	Object     string       `json:"object"`
+	OwnedBy    string       `json:"owned_by"`
+	Created    int          `json:"created"`
+	Root       string       `json:"root"`
+	Parent     *string      `json:"parent"`
+	Permission []Permission `json:"permission"`
+	FastAPI    *FastAPI     `json:"fastapi,omitempty"`
+}
+
+type Permission struct {
+	Id                 string  `json:"id"`
+	Object             string  `json:"object"`
+	Created            int     `json:"created"`
+	AllowCreateEngine  bool    `json:"allow_create_engine"`
+	AllowSampling      bool    `json:"allow_sampling"`
+	AllowLogprobs      bool    `json:"allow_logprobs"`
+	AllowSearchIndices bool    `json:"allow_search_indices"`
+	AllowView          bool    `json:"allow_view"`
+	AllowFineTuning    bool    `json:"allow_fine_tuning"`
+	Organization       string  `json:"organization"`
+	Group              *string `json:"group"`
+	IsBlocking         bool    `json:"is_blocking"`
 }
 
 type FastAPI struct {
-	Corp  string `json:"corp,omitempty"`  // 公司名称
-	Code  string `json:"code,omitempty"`  // 公司代码
-	Model string `json:"model,omitempty"` // 模型
-	Type  int    `json:"type,omitempty"`  // 模型类型[1:文生文, 2:文生图, 3:图生文, 4:图生图, 5:文生语音, 6:语音生文, 100:多模态]
-	//BaseUrl         string                 `json:"base_url,omitempty"`         // 模型地址
-	//Path            string                 `json:"path,omitempty"`             // 模型路径
-	TextQuota       common.TextQuota       `json:"text_quota,omitempty"`       // 文本额度
-	ImageQuotas     []common.ImageQuota    `json:"image_quotas,omitempty"`     // 图像额度
-	AudioQuota      common.AudioQuota      `json:"audio_quota,omitempty"`      // 音频额度
-	MultimodalQuota common.MultimodalQuota `json:"multimodal_quota,omitempty"` // 多模态额度
+	Corp             string                   `json:"corp,omitempty"`              // 公司名称
+	Code             string                   `json:"code,omitempty"`              // 公司代码
+	Model            string                   `json:"model,omitempty"`             // 模型
+	Type             int                      `json:"type,omitempty"`              // 模型类型[1:文生文, 2:文生图, 3:图生文, 4:图生图, 5:文生语音, 6:语音生文, 100:多模态, 101:多模态实时]
+	BaseUrl          string                   `json:"base_url,omitempty"`          // 模型地址
+	Path             string                   `json:"path,omitempty"`              // 模型路径
+	TextQuota        common.TextQuota         `json:"text_quota,omitempty"`        // 文本额度
+	ImageQuotas      []common.ImageQuota      `json:"image_quotas,omitempty"`      // 图像额度
+	AudioQuota       common.AudioQuota        `json:"audio_quota,omitempty"`       // 音频额度
+	MultimodalQuota  common.MultimodalQuota   `json:"multimodal_quota,omitempty"`  // 多模态额度
+	RealtimeQuota    common.RealtimeQuota     `json:"realtime_quota,omitempty"`    // 多模态实时额度
+	MidjourneyQuotas []common.MidjourneyQuota `json:"midjourney_quotas,omitempty"` // Midjourney额度
 }
