@@ -67,6 +67,7 @@ func (s *sModel) GetModel(ctx context.Context, m string) (*model.Model, error) {
 		AudioQuota:           result.AudioQuota,
 		MultimodalQuota:      result.MultimodalQuota,
 		RealtimeQuota:        result.RealtimeQuota,
+		MultimodalAudioQuota: result.MultimodalAudioQuota,
 		MidjourneyQuotas:     result.MidjourneyQuotas,
 		DataFormat:           result.DataFormat,
 		IsPublic:             result.IsPublic,
@@ -110,6 +111,7 @@ func (s *sModel) GetModelById(ctx context.Context, id string) (*model.Model, err
 		AudioQuota:           result.AudioQuota,
 		MultimodalQuota:      result.MultimodalQuota,
 		RealtimeQuota:        result.RealtimeQuota,
+		MultimodalAudioQuota: result.MultimodalAudioQuota,
 		MidjourneyQuotas:     result.MidjourneyQuotas,
 		DataFormat:           result.DataFormat,
 		IsPublic:             result.IsPublic,
@@ -520,6 +522,7 @@ func (s *sModel) List(ctx context.Context, ids []string) ([]*model.Model, error)
 			AudioQuota:           result.AudioQuota,
 			MultimodalQuota:      result.MultimodalQuota,
 			RealtimeQuota:        result.RealtimeQuota,
+			MultimodalAudioQuota: result.MultimodalAudioQuota,
 			MidjourneyQuotas:     result.MidjourneyQuotas,
 			DataFormat:           result.DataFormat,
 			IsPublic:             result.IsPublic,
@@ -571,6 +574,7 @@ func (s *sModel) ListAll(ctx context.Context) ([]*model.Model, error) {
 			AudioQuota:           result.AudioQuota,
 			MultimodalQuota:      result.MultimodalQuota,
 			RealtimeQuota:        result.RealtimeQuota,
+			MultimodalAudioQuota: result.MultimodalAudioQuota,
 			MidjourneyQuotas:     result.MidjourneyQuotas,
 			DataFormat:           result.DataFormat,
 			IsPublic:             result.IsPublic,
@@ -782,6 +786,7 @@ func (s *sModel) UpdateCacheModel(ctx context.Context, oldData *entity.Model, ne
 		AudioQuota:           newData.AudioQuota,
 		MultimodalQuota:      newData.MultimodalQuota,
 		RealtimeQuota:        newData.RealtimeQuota,
+		MultimodalAudioQuota: newData.MultimodalAudioQuota,
 		MidjourneyQuotas:     newData.MidjourneyQuotas,
 		DataFormat:           newData.DataFormat,
 		IsPublic:             newData.IsPublic,
@@ -918,7 +923,7 @@ func (s *sModel) GetTargetModel(ctx context.Context, model *model.Model, message
 			response, err := service.Chat().SmartCompletions(ctx, sdkm.ChatCompletionRequest{
 				Model:    decisionModel.Model,
 				Messages: messages,
-			}, decisionModel, nil)
+			}, decisionModel, nil, nil)
 
 			if err != nil {
 				logger.Error(ctx, err)
@@ -962,11 +967,17 @@ func (s *sModel) GetFallbackModel(ctx context.Context, model *model.Model) (fall
 		logger.Debugf(ctx, "sModel GetFallbackModel time: %d", gtime.TimestampMilli()-now)
 	}()
 
-	if fallbackModel, err = s.GetCacheModel(ctx, model.FallbackConfig.FallbackModel); err != nil || fallbackModel == nil {
-		if fallbackModel, err = s.GetModelAndSaveCache(ctx, model.FallbackConfig.FallbackModel); err != nil {
+	if fallbackModel, err = s.GetCacheModel(ctx, model.FallbackConfig.Model); err != nil || fallbackModel == nil {
+		if fallbackModel, err = s.GetModelAndSaveCache(ctx, model.FallbackConfig.Model); err != nil {
 			logger.Error(ctx, err)
 			return nil, err
 		}
+	}
+
+	if fallbackModel.Status != 1 {
+		err = errors.ERR_MODEL_HAS_BEEN_DISABLED
+		logger.Error(ctx, err)
+		return nil, err
 	}
 
 	return fallbackModel, nil

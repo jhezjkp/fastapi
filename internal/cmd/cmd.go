@@ -24,7 +24,6 @@ import (
 	"github.com/iimeta/fastapi/internal/version"
 	"github.com/iimeta/fastapi/utility/logger"
 	"net/http"
-	"runtime"
 	"strings"
 )
 
@@ -36,11 +35,11 @@ var (
 		Brief: "start http server",
 		Func: func(ctx context.Context, parser *gcmd.Parser) (err error) {
 
-			runtime.SetMutexProfileFraction(1) // (非必需)开启对锁调用的跟踪
-			runtime.SetBlockProfileRate(1)     // (非必需)开启对阻塞操作的跟踪
+			//runtime.SetMutexProfileFraction(1) // (非必需)开启对锁调用的跟踪
+			//runtime.SetBlockProfileRate(1)     // (非必需)开启对阻塞操作的跟踪
 
 			s := g.Server()
-			s.EnablePProf()
+			//s.EnablePProf()
 
 			s.BindHookHandler("/*", ghttp.HookBeforeServe, beforeServeHook)
 
@@ -62,7 +61,7 @@ var (
 				middleware(r)
 				if err := service.Realtime().Realtime(r.GetCtx(), r, model.RealtimeRequest{
 					Model: r.FormValue("model"),
-				}, nil); err != nil {
+				}, nil, nil); err != nil {
 					err := errors.Error(r.GetCtx(), err)
 					r.Response.Header().Set("Content-Type", "application/json")
 					r.Response.WriteStatus(err.Status(), gjson.MustEncodeString(err))

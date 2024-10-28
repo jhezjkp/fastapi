@@ -13,7 +13,7 @@ type Image struct {
 	ModelId              string                 `bson:"model_id,omitempty"`                // 模型ID
 	Name                 string                 `bson:"name,omitempty"`                    // 模型名称
 	Model                string                 `bson:"model,omitempty"`                   // 模型
-	Type                 int                    `bson:"type,omitempty"`                    // 模型类型[1:文生文, 2:文生图, 3:图生文, 4:图生图, 5:文生语音, 6:语音生文, 100:多模态, 101:多模态实时]
+	Type                 int                    `bson:"type,omitempty"`                    // 模型类型[1:文生文, 2:文生图, 3:图生文, 4:图生图, 5:文生语音, 6:语音生文, 100:多模态, 101:多模态实时, 102:多模态语音]
 	Key                  string                 `bson:"key,omitempty"`                     // 密钥
 	IsEnablePresetConfig bool                   `bson:"is_enable_preset_config,omitempty"` // 是否启用预设配置
 	PresetConfig         common.PresetConfig    `bson:"preset_config,omitempty"`           // 预设配置
@@ -23,8 +23,8 @@ type Image struct {
 	IsEnableForward      bool                   `bson:"is_enable_forward,omitempty"`       // 是否启用模型转发
 	ForwardConfig        *common.ForwardConfig  `bson:"forward_config,omitempty"`          // 模型转发配置
 	IsSmartMatch         bool                   `bson:"is_smart_match,omitempty"`          // 是否智能匹配
-	IsEnableFallback     bool                   `bson:"is_enable_fallback,omitempty"`      // 是否启用后备模型
-	FallbackConfig       *common.FallbackConfig `bson:"fallback_config,omitempty"`         // 后备模型配置
+	IsEnableFallback     bool                   `bson:"is_enable_fallback,omitempty"`      // 是否启用后备
+	FallbackConfig       *common.FallbackConfig `bson:"fallback_config,omitempty"`         // 后备配置
 	RealModelId          string                 `bson:"real_model_id,omitempty"`           // 真实模型ID
 	RealModelName        string                 `bson:"real_model_name,omitempty"`         // 真实模型名称
 	RealModel            string                 `bson:"real_model,omitempty"`              // 真实模型

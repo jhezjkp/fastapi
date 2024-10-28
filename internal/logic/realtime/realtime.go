@@ -51,7 +51,7 @@ func New() service.IRealtime {
 }
 
 // Realtime
-func (s *sRealtime) Realtime(ctx context.Context, r *ghttp.Request, params model.RealtimeRequest, fallbackModel *model.Model, retry ...int) (err error) {
+func (s *sRealtime) Realtime(ctx context.Context, r *ghttp.Request, params model.RealtimeRequest, fallbackModelAgent *model.ModelAgent, fallbackModel *model.Model, retry ...int) (err error) {
 
 	now := gtime.TimestampMilli()
 	defer func() {
@@ -81,19 +81,16 @@ func (s *sRealtime) Realtime(ctx context.Context, r *ghttp.Request, params model
 	}
 
 	var (
-		client     *sdk.RealtimeClient
-		reqModel   *model.Model
-		realModel  = new(model.Model)
-		k          *model.Key
-		modelAgent *model.ModelAgent
-		baseUrl    string
-		path       string
-		agentTotal int
-		keyTotal   int
-		connTime   int64
-		duration   int64
-		totalTime  int64
-		retryInfo  *mcommon.Retry
+		mak = &common.MAK{
+			Model:              params.Model,
+			FallbackModelAgent: fallbackModelAgent,
+			FallbackModel:      fallbackModel,
+		}
+		client    *sdk.RealtimeClient
+		connTime  int64
+		duration  int64
+		totalTime int64
+		retryInfo *mcommon.Retry
 	)
 
 	defer func() {
@@ -104,7 +101,7 @@ func (s *sRealtime) Realtime(ctx context.Context, r *ghttp.Request, params model
 		if err != nil {
 			if err := grpool.Add(gctx.NeverDone(ctx), func(ctx context.Context) {
 
-				realModel.ModelAgent = modelAgent
+				mak.RealModel.ModelAgent = mak.ModelAgent
 
 				completionsRes := &model.CompletionsRes{
 					Error:        err,
@@ -115,7 +112,7 @@ func (s *sRealtime) Realtime(ctx context.Context, r *ghttp.Request, params model
 					EnterTime:    enterTime,
 				}
 
-				s.SaveLog(ctx, reqModel, realModel, fallbackModel, k, &sdkm.ChatCompletionRequest{Stream: true}, completionsRes, retryInfo, false)
+				s.SaveLog(ctx, mak.ReqModel, mak.RealModel, fallbackModelAgent, fallbackModel, mak.Key, &sdkm.ChatCompletionRequest{Stream: true}, completionsRes, retryInfo, false)
 
 			}); err != nil {
 				logger.Error(ctx, err)
@@ -123,108 +120,13 @@ func (s *sRealtime) Realtime(ctx context.Context, r *ghttp.Request, params model
 		}
 	}()
 
-	if reqModel, err = service.Model().GetModelBySecretKey(ctx, params.Model, service.Session().GetSecretKey(ctx)); err != nil {
+	if err = mak.InitMAK(ctx); err != nil {
 		logger.Error(ctx, err)
 		return err
 	}
 
-	if fallbackModel != nil {
-		*realModel = *fallbackModel
-	} else {
-		*realModel = *reqModel
-	}
-
-	if realModel.IsEnableForward {
-		if realModel, err = service.Model().GetTargetModel(ctx, realModel, params.Messages); err != nil {
-			logger.Error(ctx, err)
-			return err
-		}
-	}
-
-	baseUrl = realModel.BaseUrl
-	path = realModel.Path
-
-	if realModel.IsEnableModelAgent {
-		if agentTotal, modelAgent, err = service.ModelAgent().PickModelAgent(ctx, realModel); err != nil {
-			logger.Error(ctx, err)
-
-			if realModel.IsEnableFallback {
-				if fallbackModel, _ = service.Model().GetFallbackModel(ctx, realModel); fallbackModel != nil {
-					retryInfo = &mcommon.Retry{
-						IsRetry:    true,
-						RetryCount: len(retry),
-						ErrMsg:     err.Error(),
-					}
-					return s.Realtime(ctx, r, params, fallbackModel)
-				}
-			}
-
-			return err
-		}
-
-		if modelAgent != nil {
-
-			baseUrl = modelAgent.BaseUrl
-			path = modelAgent.Path
-
-			if keyTotal, k, err = service.ModelAgent().PickModelAgentKey(ctx, modelAgent); err != nil {
-				logger.Error(ctx, err)
-
-				service.ModelAgent().RecordErrorModelAgent(ctx, realModel, modelAgent)
-
-				if errors.Is(err, errors.ERR_NO_AVAILABLE_MODEL_AGENT_KEY) {
-					service.ModelAgent().DisabledModelAgent(ctx, modelAgent, "No available model agent key")
-				}
-
-				if realModel.IsEnableFallback {
-					if fallbackModel, _ = service.Model().GetFallbackModel(ctx, realModel); fallbackModel != nil {
-						retryInfo = &mcommon.Retry{
-							IsRetry:    true,
-							RetryCount: len(retry),
-							ErrMsg:     err.Error(),
-						}
-						return s.Realtime(ctx, r, params, fallbackModel)
-					}
-				}
-
-				return err
-			}
-		}
-
-	} else {
-		if keyTotal, k, err = service.Key().PickModelKey(ctx, realModel); err != nil {
-			logger.Error(ctx, err)
-
-			if realModel.IsEnableFallback {
-				if fallbackModel, _ = service.Model().GetFallbackModel(ctx, realModel); fallbackModel != nil {
-					retryInfo = &mcommon.Retry{
-						IsRetry:    true,
-						RetryCount: len(retry),
-						ErrMsg:     err.Error(),
-					}
-					return s.Realtime(ctx, r, params, fallbackModel)
-				}
-			}
-
-			return err
-		}
-	}
-
-	client, err = common.NewRealtimeClient(ctx, realModel, k.Key, baseUrl, path)
-	if err != nil {
+	if client, err = common.NewRealtimeClient(ctx, mak.RealModel, mak.RealKey, mak.BaseUrl, mak.Path); err != nil {
 		logger.Error(ctx, err)
-
-		if realModel.IsEnableFallback {
-			if fallbackModel, _ = service.Model().GetFallbackModel(ctx, realModel); fallbackModel != nil {
-				retryInfo = &mcommon.Retry{
-					IsRetry:    true,
-					RetryCount: len(retry),
-					ErrMsg:     err.Error(),
-				}
-				return s.Realtime(ctx, r, params, fallbackModel)
-			}
-		}
-
 		return err
 	}
 
@@ -235,16 +137,16 @@ func (s *sRealtime) Realtime(ctx context.Context, r *ghttp.Request, params model
 		logger.Error(ctx, err)
 
 		// 记录错误次数和禁用
-		service.Common().RecordError(ctx, realModel, k, modelAgent)
+		service.Common().RecordError(ctx, mak.RealModel, mak.Key, mak.ModelAgent)
 
 		isRetry, isDisabled := common.IsNeedRetry(err)
 
 		if isDisabled {
 			if err := grpool.AddWithRecover(gctx.NeverDone(ctx), func(ctx context.Context) {
-				if realModel.IsEnableModelAgent {
-					service.ModelAgent().DisabledModelAgentKey(ctx, k, err.Error())
+				if mak.RealModel.IsEnableModelAgent {
+					service.ModelAgent().DisabledModelAgentKey(ctx, mak.Key, err.Error())
 				} else {
-					service.Key().DisabledModelKey(ctx, k, err.Error())
+					service.Key().DisabledModelKey(ctx, mak.Key, err.Error())
 				}
 			}, nil); err != nil {
 				logger.Error(ctx, err)
@@ -252,17 +154,34 @@ func (s *sRealtime) Realtime(ctx context.Context, r *ghttp.Request, params model
 		}
 
 		if isRetry {
-			if common.IsMaxRetry(realModel.IsEnableModelAgent, agentTotal, keyTotal, len(retry)) {
-				if realModel.IsEnableFallback {
-					if fallbackModel, _ = service.Model().GetFallbackModel(ctx, realModel); fallbackModel != nil {
-						retryInfo = &mcommon.Retry{
-							IsRetry:    true,
-							RetryCount: len(retry),
-							ErrMsg:     err.Error(),
+
+			if common.IsMaxRetry(mak.RealModel.IsEnableModelAgent, mak.AgentTotal, mak.KeyTotal, len(retry)) {
+
+				if mak.RealModel.IsEnableFallback {
+
+					if mak.RealModel.FallbackConfig.ModelAgent != "" && mak.RealModel.FallbackConfig.ModelAgent != mak.ModelAgent.Id {
+						if fallbackModelAgent, _ = service.ModelAgent().GetFallbackModelAgent(ctx, mak.RealModel); fallbackModelAgent != nil {
+							retryInfo = &mcommon.Retry{
+								IsRetry:    true,
+								RetryCount: len(retry),
+								ErrMsg:     err.Error(),
+							}
+							return s.Realtime(ctx, r, params, fallbackModelAgent, fallbackModel)
 						}
-						return s.Realtime(ctx, r, params, fallbackModel)
+					}
+
+					if mak.RealModel.FallbackConfig.Model != "" {
+						if fallbackModel, _ = service.Model().GetFallbackModel(ctx, mak.RealModel); fallbackModel != nil {
+							retryInfo = &mcommon.Retry{
+								IsRetry:    true,
+								RetryCount: len(retry),
+								ErrMsg:     err.Error(),
+							}
+							return s.Realtime(ctx, r, params, nil, fallbackModel)
+						}
 					}
 				}
+
 				return err
 			}
 
@@ -272,7 +191,7 @@ func (s *sRealtime) Realtime(ctx context.Context, r *ghttp.Request, params model
 				ErrMsg:     err.Error(),
 			}
 
-			return s.Realtime(ctx, r, params, fallbackModel, append(retry, 1)...)
+			return s.Realtime(ctx, r, params, fallbackModelAgent, fallbackModel, append(retry, 1)...)
 		}
 
 		return err
@@ -307,11 +226,11 @@ func (s *sRealtime) Realtime(ctx context.Context, r *ghttp.Request, params model
 				}
 
 				// 记录错误次数和禁用
-				service.Common().RecordError(ctx, realModel, k, modelAgent)
+				service.Common().RecordError(ctx, mak.RealModel, mak.Key, mak.ModelAgent)
 
 				if err := grpool.Add(gctx.NeverDone(ctx), func(ctx context.Context) {
 
-					realModel.ModelAgent = modelAgent
+					mak.RealModel.ModelAgent = mak.ModelAgent
 					enterTime := g.RequestFromCtx(ctx).EnterTime.TimestampMilli()
 					internalTime := gtime.TimestampMilli() - enterTime - totalTime
 
@@ -324,7 +243,7 @@ func (s *sRealtime) Realtime(ctx context.Context, r *ghttp.Request, params model
 						EnterTime:    enterTime,
 					}
 
-					s.SaveLog(ctx, reqModel, realModel, fallbackModel, k, &sdkm.ChatCompletionRequest{Stream: true}, completionsRes, retryInfo, false)
+					s.SaveLog(ctx, mak.ReqModel, mak.RealModel, fallbackModelAgent, fallbackModel, mak.Key, &sdkm.ChatCompletionRequest{Stream: true}, completionsRes, retryInfo, false)
 
 				}); err != nil {
 					logger.Error(ctx, err)
@@ -368,11 +287,15 @@ func (s *sRealtime) Realtime(ctx context.Context, r *ghttp.Request, params model
 					responseCompletion = realtimeResponse.Part.Transcript
 				}
 			case "response.output_item.done":
-				if realtimeResponse.Item.Content[0].Text != "" {
-					responseCompletion = realtimeResponse.Item.Content[0].Text
-				}
-				if realtimeResponse.Item.Content[0].Transcript != "" {
-					responseCompletion = realtimeResponse.Item.Content[0].Transcript
+				if len(realtimeResponse.Item.Content) > 0 {
+					if realtimeResponse.Item.Content[0].Text != "" {
+						responseCompletion = realtimeResponse.Item.Content[0].Text
+					}
+					if realtimeResponse.Item.Content[0].Transcript != "" {
+						responseCompletion = realtimeResponse.Item.Content[0].Transcript
+					}
+				} else if realtimeResponse.Item.Arguments != nil {
+					responseCompletion = gconv.String(realtimeResponse.Item.Arguments)
 				}
 			}
 
@@ -388,14 +311,23 @@ func (s *sRealtime) Realtime(ctx context.Context, r *ghttp.Request, params model
 				completion := responseCompletion
 				totalTokens := 0
 
-				if realtimeResponse.Response.Output[0].Content[0].Type == "text" {
-					totalTokens = int(math.Ceil(float64(usage.PromptTokens)*reqModel.RealtimeQuota.TextQuota.PromptRatio)) + int(math.Ceil(float64(usage.CompletionTokens)*reqModel.RealtimeQuota.TextQuota.CompletionRatio))
+				typ := ""
+				if len(realtimeResponse.Response.Output) > 0 {
+					if len(realtimeResponse.Response.Output[0].Content) > 0 {
+						typ = realtimeResponse.Response.Output[0].Content[0].Type
+					} else {
+						typ = realtimeResponse.Response.Output[0].Type
+					}
+				}
+
+				if typ == "text" || typ == "function_call" {
+					totalTokens = int(math.Ceil(float64(usage.PromptTokens)*mak.ReqModel.RealtimeQuota.TextQuota.PromptRatio)) + int(math.Ceil(float64(usage.CompletionTokens)*mak.ReqModel.RealtimeQuota.TextQuota.CompletionRatio))
 				} else {
-					totalTokens = int(math.Ceil(float64(usage.PromptTokens)*reqModel.RealtimeQuota.AudioQuota.PromptRatio)) + int(math.Ceil(float64(usage.CompletionTokens)*reqModel.RealtimeQuota.AudioQuota.CompletionRatio))
+					totalTokens = int(math.Ceil(float64(usage.PromptTokens)*mak.ReqModel.RealtimeQuota.AudioQuota.PromptRatio)) + int(math.Ceil(float64(usage.CompletionTokens)*mak.ReqModel.RealtimeQuota.AudioQuota.CompletionRatio))
 				}
 
 				if err := grpool.Add(gctx.NeverDone(ctx), func(ctx context.Context) {
-					if err := service.Common().RecordUsage(ctx, totalTokens, k.Key); err != nil {
+					if err := service.Common().RecordUsage(ctx, totalTokens, mak.Key.Key); err != nil {
 						logger.Error(ctx, err)
 						panic(err)
 					}
@@ -405,12 +337,12 @@ func (s *sRealtime) Realtime(ctx context.Context, r *ghttp.Request, params model
 
 				if err := grpool.Add(gctx.NeverDone(ctx), func(ctx context.Context) {
 
-					realModel.ModelAgent = modelAgent
+					mak.RealModel.ModelAgent = mak.ModelAgent
 					enterTime := g.RequestFromCtx(ctx).EnterTime.TimestampMilli()
 					internalTime := gtime.TimestampMilli() - enterTime - totalTime
 
 					completionsRes := &model.CompletionsRes{
-						Type:         realtimeResponse.Response.Output[0].Content[0].Type,
+						Type:         typ,
 						Completion:   completion,
 						Error:        err,
 						ConnTime:     response.ConnTime,
@@ -423,7 +355,7 @@ func (s *sRealtime) Realtime(ctx context.Context, r *ghttp.Request, params model
 					completionsRes.Usage = *usage
 					completionsRes.Usage.TotalTokens = totalTokens
 
-					s.SaveLog(ctx, reqModel, realModel, fallbackModel, k, &sdkm.ChatCompletionRequest{Stream: true, Messages: []sdkm.ChatCompletionMessage{{Content: message}}}, completionsRes, retryInfo, false)
+					s.SaveLog(ctx, mak.ReqModel, mak.RealModel, fallbackModelAgent, fallbackModel, mak.Key, &sdkm.ChatCompletionRequest{Stream: true, Messages: []sdkm.ChatCompletionMessage{{Content: message}}}, completionsRes, retryInfo, false)
 
 				}); err != nil {
 					logger.Error(ctx, err)
@@ -489,7 +421,7 @@ func (s *sRealtime) Realtime(ctx context.Context, r *ghttp.Request, params model
 }
 
 // 保存日志
-func (s *sRealtime) SaveLog(ctx context.Context, reqModel, realModel, fallbackModel *model.Model, key *model.Key, completionsReq *sdkm.ChatCompletionRequest, completionsRes *model.CompletionsRes, retryInfo *mcommon.Retry, isSmartMatch bool, retry ...int) {
+func (s *sRealtime) SaveLog(ctx context.Context, reqModel, realModel *model.Model, fallbackModelAgent *model.ModelAgent, fallbackModel *model.Model, key *model.Key, completionsReq *sdkm.ChatCompletionRequest, completionsRes *model.CompletionsRes, retryInfo *mcommon.Retry, isSmartMatch bool, retry ...int) {
 
 	now := gtime.TimestampMilli()
 	defer func() {
@@ -574,12 +506,21 @@ func (s *sRealtime) SaveLog(ctx context.Context, reqModel, realModel, fallbackMo
 	chat.CompletionTokens = completionsRes.Usage.CompletionTokens
 	chat.TotalTokens = completionsRes.Usage.TotalTokens
 
-	if fallbackModel != nil {
+	if fallbackModelAgent != nil {
 		chat.IsEnableFallback = true
 		chat.FallbackConfig = &mcommon.FallbackConfig{
-			FallbackModel:     fallbackModel.Model,
-			FallbackModelName: fallbackModel.Name,
+			ModelAgent:     fallbackModelAgent.Id,
+			ModelAgentName: fallbackModelAgent.Name,
 		}
+	}
+
+	if fallbackModel != nil {
+		chat.IsEnableFallback = true
+		if chat.FallbackConfig == nil {
+			chat.FallbackConfig = new(mcommon.FallbackConfig)
+		}
+		chat.FallbackConfig.Model = fallbackModel.Model
+		chat.FallbackConfig.ModelName = fallbackModel.Name
 	}
 
 	if key != nil {
@@ -622,7 +563,7 @@ func (s *sRealtime) SaveLog(ctx context.Context, reqModel, realModel, fallbackMo
 	if _, err := dao.Chat.Insert(ctx, chat); err != nil {
 		logger.Error(ctx, err)
 
-		if len(retry) == 5 {
+		if len(retry) == 10 {
 			panic(err)
 		}
 
@@ -632,6 +573,6 @@ func (s *sRealtime) SaveLog(ctx context.Context, reqModel, realModel, fallbackMo
 
 		logger.Errorf(ctx, "sChat SaveLog retry: %d", len(retry))
 
-		s.SaveLog(ctx, reqModel, realModel, fallbackModel, key, completionsReq, completionsRes, retryInfo, isSmartMatch, retry...)
+		s.SaveLog(ctx, reqModel, realModel, fallbackModelAgent, fallbackModel, key, completionsReq, completionsRes, retryInfo, isSmartMatch, retry...)
 	}
 }

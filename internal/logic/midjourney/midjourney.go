@@ -37,7 +37,7 @@ func New() service.IMidjourney {
 }
 
 // 任务提交
-func (s *sMidjourney) Submit(ctx context.Context, request *ghttp.Request, fallbackModel *model.Model, retry ...int) (response sdkm.MidjourneyResponse, err error) {
+func (s *sMidjourney) Submit(ctx context.Context, request *ghttp.Request, fallbackModelAgent *model.ModelAgent, fallbackModel *model.Model, retry ...int) (response sdkm.MidjourneyResponse, err error) {
 
 	now := gtime.TimestampMilli()
 	defer func() {
@@ -45,17 +45,15 @@ func (s *sMidjourney) Submit(ctx context.Context, request *ghttp.Request, fallba
 	}()
 
 	var (
-		defaultModel    = "midjourney"
-		reqModel        *model.Model
-		realModel       = new(model.Model)
-		k               *model.Key
-		modelAgent      *model.ModelAgent
+		defaultModel = "midjourney"
+		mak          = &common.MAK{
+			Model:              defaultModel,
+			FallbackModelAgent: fallbackModelAgent,
+			FallbackModel:      fallbackModel,
+		}
 		midjourneyQuota mcommon.MidjourneyQuota
-		key             string
 		baseUrl         = config.Cfg.Midjourney.MidjourneyProxy.ApiBaseUrl
 		path            = request.RequestURI[3:]
-		agentTotal      int
-		keyTotal        int
 		retryInfo       *mcommon.Retry
 		reqUrl          = request.RequestURI
 		taskId          string
@@ -64,6 +62,7 @@ func (s *sMidjourney) Submit(ctx context.Context, request *ghttp.Request, fallba
 
 	if model := request.GetRouterMap()["model"]; model != "" {
 		defaultModel = model
+		mak.Model = model
 		path = gstr.Replace(path, "/"+defaultModel, "")
 	}
 
@@ -77,7 +76,7 @@ func (s *sMidjourney) Submit(ctx context.Context, request *ghttp.Request, fallba
 
 		if retryInfo == nil && (err == nil || common.IsAborted(err)) {
 			if err := grpool.Add(gctx.NeverDone(ctx), func(ctx context.Context) {
-				if err := service.Common().RecordUsage(ctx, usage.TotalTokens, k.Key); err != nil {
+				if err := service.Common().RecordUsage(ctx, usage.TotalTokens, mak.Key.Key); err != nil {
 					logger.Error(ctx, err)
 					panic(err)
 				}
@@ -88,7 +87,7 @@ func (s *sMidjourney) Submit(ctx context.Context, request *ghttp.Request, fallba
 
 		if err := grpool.Add(gctx.NeverDone(ctx), func(ctx context.Context) {
 
-			realModel.ModelAgent = modelAgent
+			mak.RealModel.ModelAgent = mak.ModelAgent
 
 			midjourneyResponse := model.MidjourneyResponse{
 				ReqUrl:             reqUrl,
@@ -105,114 +104,40 @@ func (s *sMidjourney) Submit(ctx context.Context, request *ghttp.Request, fallba
 				midjourneyResponse.Usage = *usage
 			}
 
-			s.SaveLog(ctx, reqModel, realModel, fallbackModel, k, midjourneyResponse, retryInfo)
+			s.SaveLog(ctx, mak.ReqModel, mak.RealModel, fallbackModelAgent, fallbackModel, mak.Key, midjourneyResponse, retryInfo)
 
 		}); err != nil {
 			logger.Error(ctx, err)
 		}
 	}()
 
-	if reqModel, err = service.Model().GetModelBySecretKey(ctx, defaultModel, service.Session().GetSecretKey(ctx)); err != nil {
+	if err = mak.InitMAK(ctx); err != nil {
 		logger.Error(ctx, err)
 		return response, err
 	}
 
-	if fallbackModel != nil {
-		*realModel = *fallbackModel
-	} else {
-		*realModel = *reqModel
-	}
-
-	midjourneyQuota, err = common.GetMidjourneyQuota(realModel, request, path)
-	if err != nil {
+	if midjourneyQuota, err = common.GetMidjourneyQuota(mak.RealModel, request, path); err != nil {
 		logger.Error(ctx, err)
 		return response, err
 	}
 
-	if realModel.IsEnableModelAgent {
+	client := sdk.NewMidjourneyClient(ctx, baseUrl, midjourneyQuota.Path, mak.RealKey, config.Cfg.Midjourney.MidjourneyProxy.ApiSecretHeader, request.Method, config.Cfg.Http.ProxyUrl)
 
-		if agentTotal, modelAgent, err = service.ModelAgent().PickModelAgent(ctx, realModel); err != nil {
-			logger.Error(ctx, err)
-
-			if realModel.IsEnableFallback {
-				if fallbackModel, _ = service.Model().GetFallbackModel(ctx, realModel); fallbackModel != nil {
-					retryInfo = &mcommon.Retry{
-						IsRetry:    true,
-						RetryCount: len(retry),
-						ErrMsg:     err.Error(),
-					}
-					return s.Submit(ctx, request, fallbackModel)
-				}
-			}
-
-			return response, err
-		}
-
-		if modelAgent != nil {
-
-			baseUrl = modelAgent.BaseUrl
-
-			if keyTotal, k, err = service.ModelAgent().PickModelAgentKey(ctx, modelAgent); err != nil {
-				logger.Error(ctx, err)
-
-				service.ModelAgent().RecordErrorModelAgent(ctx, realModel, modelAgent)
-
-				if errors.Is(err, errors.ERR_NO_AVAILABLE_MODEL_AGENT_KEY) {
-					service.ModelAgent().DisabledModelAgent(ctx, modelAgent, "No available model agent key")
-				}
-
-				if realModel.IsEnableFallback {
-					if fallbackModel, _ = service.Model().GetFallbackModel(ctx, realModel); fallbackModel != nil {
-						retryInfo = &mcommon.Retry{
-							IsRetry:    true,
-							RetryCount: len(retry),
-							ErrMsg:     err.Error(),
-						}
-						return s.Submit(ctx, request, fallbackModel)
-					}
-				}
-
-				return response, err
-			}
-		}
-
-	} else {
-		if keyTotal, k, err = service.Key().PickModelKey(ctx, realModel); err != nil {
-			logger.Error(ctx, err)
-
-			if realModel.IsEnableFallback {
-				if fallbackModel, _ = service.Model().GetFallbackModel(ctx, realModel); fallbackModel != nil {
-					retryInfo = &mcommon.Retry{
-						IsRetry:    true,
-						RetryCount: len(retry),
-						ErrMsg:     err.Error(),
-					}
-					return s.Submit(ctx, request, fallbackModel)
-				}
-			}
-
-			return response, err
-		}
-	}
-
-	key = k.Key
-
-	client := sdk.NewMidjourneyClient(ctx, baseUrl, midjourneyQuota.Path, key, config.Cfg.Midjourney.MidjourneyProxy.ApiSecretHeader, request.Method, config.Cfg.Http.ProxyUrl)
 	response, err = client.Request(ctx, request.GetBody())
 	if err != nil {
 		logger.Error(ctx, err)
 
 		// 记录错误次数和禁用
-		service.Common().RecordError(ctx, realModel, k, modelAgent)
+		service.Common().RecordError(ctx, mak.RealModel, mak.Key, mak.ModelAgent)
 
 		isRetry, isDisabled := common.IsNeedRetry(err)
 
 		if isDisabled {
 			if err := grpool.AddWithRecover(gctx.NeverDone(ctx), func(ctx context.Context) {
-				if realModel.IsEnableModelAgent {
-					service.ModelAgent().DisabledModelAgentKey(ctx, k, err.Error())
+				if mak.RealModel.IsEnableModelAgent {
+					service.ModelAgent().DisabledModelAgentKey(ctx, mak.Key, err.Error())
 				} else {
-					service.Key().DisabledModelKey(ctx, k, err.Error())
+					service.Key().DisabledModelKey(ctx, mak.Key, err.Error())
 				}
 			}, nil); err != nil {
 				logger.Error(ctx, err)
@@ -221,17 +146,33 @@ func (s *sMidjourney) Submit(ctx context.Context, request *ghttp.Request, fallba
 
 		if isRetry {
 
-			if common.IsMaxRetry(realModel.IsEnableModelAgent, agentTotal, keyTotal, len(retry)) {
-				if realModel.IsEnableFallback {
-					if fallbackModel, _ = service.Model().GetFallbackModel(ctx, realModel); fallbackModel != nil {
-						retryInfo = &mcommon.Retry{
-							IsRetry:    true,
-							RetryCount: len(retry),
-							ErrMsg:     err.Error(),
+			if common.IsMaxRetry(mak.RealModel.IsEnableModelAgent, mak.AgentTotal, mak.KeyTotal, len(retry)) {
+
+				if mak.RealModel.IsEnableFallback {
+
+					if mak.RealModel.FallbackConfig.ModelAgent != "" && mak.RealModel.FallbackConfig.ModelAgent != mak.ModelAgent.Id {
+						if fallbackModelAgent, _ = service.ModelAgent().GetFallbackModelAgent(ctx, mak.RealModel); fallbackModelAgent != nil {
+							retryInfo = &mcommon.Retry{
+								IsRetry:    true,
+								RetryCount: len(retry),
+								ErrMsg:     err.Error(),
+							}
+							return s.Submit(ctx, request, fallbackModelAgent, fallbackModel)
 						}
-						return s.Submit(ctx, request, fallbackModel)
+					}
+
+					if mak.RealModel.FallbackConfig.Model != "" {
+						if fallbackModel, _ = service.Model().GetFallbackModel(ctx, mak.RealModel); fallbackModel != nil {
+							retryInfo = &mcommon.Retry{
+								IsRetry:    true,
+								RetryCount: len(retry),
+								ErrMsg:     err.Error(),
+							}
+							return s.Submit(ctx, request, nil, fallbackModel)
+						}
 					}
 				}
+
 				return response, err
 			}
 
@@ -241,7 +182,7 @@ func (s *sMidjourney) Submit(ctx context.Context, request *ghttp.Request, fallba
 				ErrMsg:     err.Error(),
 			}
 
-			return s.Submit(ctx, request, fallbackModel, append(retry, 1)...)
+			return s.Submit(ctx, request, fallbackModelAgent, fallbackModel, append(retry, 1)...)
 		}
 
 		return response, err
@@ -259,7 +200,7 @@ func (s *sMidjourney) Submit(ctx context.Context, request *ghttp.Request, fallba
 }
 
 // 任务查询
-func (s *sMidjourney) Task(ctx context.Context, request *ghttp.Request, fallbackModel *model.Model, retry ...int) (response sdkm.MidjourneyResponse, err error) {
+func (s *sMidjourney) Task(ctx context.Context, request *ghttp.Request, fallbackModelAgent *model.ModelAgent, fallbackModel *model.Model, retry ...int) (response sdkm.MidjourneyResponse, err error) {
 
 	now := gtime.TimestampMilli()
 	defer func() {
@@ -267,17 +208,15 @@ func (s *sMidjourney) Task(ctx context.Context, request *ghttp.Request, fallback
 	}()
 
 	var (
-		defaultModel    = "midjourney"
-		reqModel        *model.Model
-		realModel       = new(model.Model)
-		k               *model.Key
-		modelAgent      *model.ModelAgent
+		defaultModel = "midjourney"
+		mak          = &common.MAK{
+			Model:              defaultModel,
+			FallbackModelAgent: fallbackModelAgent,
+			FallbackModel:      fallbackModel,
+		}
 		midjourneyQuota mcommon.MidjourneyQuota
-		key             string
 		baseUrl         = config.Cfg.Midjourney.MidjourneyProxy.ApiBaseUrl
 		path            = request.RequestURI[3:]
-		agentTotal      int
-		keyTotal        int
 		taskId          = request.GetRouterMap()["taskId"]
 		imageUrl        string
 		retryInfo       *mcommon.Retry
@@ -285,6 +224,7 @@ func (s *sMidjourney) Task(ctx context.Context, request *ghttp.Request, fallback
 
 	if model := request.GetRouterMap()["model"]; model != "" {
 		defaultModel = model
+		mak.Model = model
 		path = gstr.Replace(path, "/"+defaultModel, "")
 	}
 
@@ -298,7 +238,7 @@ func (s *sMidjourney) Task(ctx context.Context, request *ghttp.Request, fallback
 
 		if retryInfo == nil && (err == nil || common.IsAborted(err)) {
 			if err := grpool.Add(gctx.NeverDone(ctx), func(ctx context.Context) {
-				if err := service.Common().RecordUsage(ctx, usage.TotalTokens, k.Key); err != nil {
+				if err := service.Common().RecordUsage(ctx, usage.TotalTokens, mak.Key.Key); err != nil {
 					logger.Error(ctx, err)
 					panic(err)
 				}
@@ -309,7 +249,7 @@ func (s *sMidjourney) Task(ctx context.Context, request *ghttp.Request, fallback
 
 		if err := grpool.Add(gctx.NeverDone(ctx), func(ctx context.Context) {
 
-			realModel.ModelAgent = modelAgent
+			mak.RealModel.ModelAgent = mak.ModelAgent
 
 			midjourneyResponse := model.MidjourneyResponse{
 				MidjourneyResponse: sdkm.MidjourneyResponse{
@@ -325,115 +265,40 @@ func (s *sMidjourney) Task(ctx context.Context, request *ghttp.Request, fallback
 				midjourneyResponse.Usage = *usage
 			}
 
-			s.SaveLog(ctx, reqModel, realModel, fallbackModel, k, midjourneyResponse, retryInfo)
+			s.SaveLog(ctx, mak.ReqModel, mak.RealModel, fallbackModelAgent, fallbackModel, mak.Key, midjourneyResponse, retryInfo)
 
 		}); err != nil {
 			logger.Error(ctx, err)
 		}
 	}()
 
-	if reqModel, err = service.Model().GetModelBySecretKey(ctx, defaultModel, service.Session().GetSecretKey(ctx)); err != nil {
+	if err = mak.InitMAK(ctx); err != nil {
 		logger.Error(ctx, err)
 		return response, err
 	}
 
-	if fallbackModel != nil {
-		*realModel = *fallbackModel
-	} else {
-		*realModel = *reqModel
-	}
-
-	midjourneyQuota, err = common.GetMidjourneyQuota(realModel, request, path)
-	if err != nil {
+	if midjourneyQuota, err = common.GetMidjourneyQuota(mak.RealModel, request, path); err != nil {
 		logger.Error(ctx, err)
 		return response, err
 	}
 
-	if realModel.IsEnableModelAgent {
+	client := sdk.NewMidjourneyClient(ctx, baseUrl, path, mak.RealKey, config.Cfg.Midjourney.MidjourneyProxy.ApiSecretHeader, http.MethodGet, config.Cfg.Http.ProxyUrl)
 
-		if agentTotal, modelAgent, err = service.ModelAgent().PickModelAgent(ctx, realModel); err != nil {
-			logger.Error(ctx, err)
-
-			if realModel.IsEnableFallback {
-				if fallbackModel, _ = service.Model().GetFallbackModel(ctx, realModel); fallbackModel != nil {
-					retryInfo = &mcommon.Retry{
-						IsRetry:    true,
-						RetryCount: len(retry),
-						ErrMsg:     err.Error(),
-					}
-					return s.Task(ctx, request, fallbackModel)
-				}
-			}
-
-			return response, err
-		}
-
-		if modelAgent != nil {
-
-			baseUrl = modelAgent.BaseUrl
-			path = modelAgent.Path
-
-			if keyTotal, k, err = service.ModelAgent().PickModelAgentKey(ctx, modelAgent); err != nil {
-				logger.Error(ctx, err)
-
-				service.ModelAgent().RecordErrorModelAgent(ctx, realModel, modelAgent)
-
-				if errors.Is(err, errors.ERR_NO_AVAILABLE_MODEL_AGENT_KEY) {
-					service.ModelAgent().DisabledModelAgent(ctx, modelAgent, "No available model agent key")
-				}
-
-				if realModel.IsEnableFallback {
-					if fallbackModel, _ = service.Model().GetFallbackModel(ctx, realModel); fallbackModel != nil {
-						retryInfo = &mcommon.Retry{
-							IsRetry:    true,
-							RetryCount: len(retry),
-							ErrMsg:     err.Error(),
-						}
-						return s.Task(ctx, request, fallbackModel)
-					}
-				}
-
-				return response, err
-			}
-		}
-
-	} else {
-		if keyTotal, k, err = service.Key().PickModelKey(ctx, realModel); err != nil {
-			logger.Error(ctx, err)
-
-			if realModel.IsEnableFallback {
-				if fallbackModel, _ = service.Model().GetFallbackModel(ctx, realModel); fallbackModel != nil {
-					retryInfo = &mcommon.Retry{
-						IsRetry:    true,
-						RetryCount: len(retry),
-						ErrMsg:     err.Error(),
-					}
-					return s.Task(ctx, request, fallbackModel)
-				}
-			}
-
-			return response, err
-		}
-	}
-
-	key = k.Key
-
-	client := sdk.NewMidjourneyClient(ctx, baseUrl, path, key, config.Cfg.Midjourney.MidjourneyProxy.ApiSecretHeader, http.MethodGet, config.Cfg.Http.ProxyUrl)
 	response, err = client.Request(ctx, request.GetBody())
 	if err != nil {
 		logger.Error(ctx, err)
 
 		// 记录错误次数和禁用
-		service.Common().RecordError(ctx, realModel, k, modelAgent)
+		service.Common().RecordError(ctx, mak.RealModel, mak.Key, mak.ModelAgent)
 
 		isRetry, isDisabled := common.IsNeedRetry(err)
 
 		if isDisabled {
 			if err := grpool.AddWithRecover(gctx.NeverDone(ctx), func(ctx context.Context) {
-				if realModel.IsEnableModelAgent {
-					service.ModelAgent().DisabledModelAgentKey(ctx, k, err.Error())
+				if mak.RealModel.IsEnableModelAgent {
+					service.ModelAgent().DisabledModelAgentKey(ctx, mak.Key, err.Error())
 				} else {
-					service.Key().DisabledModelKey(ctx, k, err.Error())
+					service.Key().DisabledModelKey(ctx, mak.Key, err.Error())
 				}
 			}, nil); err != nil {
 				logger.Error(ctx, err)
@@ -442,17 +307,33 @@ func (s *sMidjourney) Task(ctx context.Context, request *ghttp.Request, fallback
 
 		if isRetry {
 
-			if common.IsMaxRetry(realModel.IsEnableModelAgent, agentTotal, keyTotal, len(retry)) {
-				if realModel.IsEnableFallback {
-					if fallbackModel, _ = service.Model().GetFallbackModel(ctx, realModel); fallbackModel != nil {
-						retryInfo = &mcommon.Retry{
-							IsRetry:    true,
-							RetryCount: len(retry),
-							ErrMsg:     err.Error(),
+			if common.IsMaxRetry(mak.RealModel.IsEnableModelAgent, mak.AgentTotal, mak.KeyTotal, len(retry)) {
+
+				if mak.RealModel.IsEnableFallback {
+
+					if mak.RealModel.FallbackConfig.ModelAgent != "" && mak.RealModel.FallbackConfig.ModelAgent != mak.ModelAgent.Id {
+						if fallbackModelAgent, _ = service.ModelAgent().GetFallbackModelAgent(ctx, mak.RealModel); fallbackModelAgent != nil {
+							retryInfo = &mcommon.Retry{
+								IsRetry:    true,
+								RetryCount: len(retry),
+								ErrMsg:     err.Error(),
+							}
+							return s.Task(ctx, request, fallbackModelAgent, fallbackModel)
 						}
-						return s.Task(ctx, request, fallbackModel)
+					}
+
+					if mak.RealModel.FallbackConfig.Model != "" {
+						if fallbackModel, _ = service.Model().GetFallbackModel(ctx, mak.RealModel); fallbackModel != nil {
+							retryInfo = &mcommon.Retry{
+								IsRetry:    true,
+								RetryCount: len(retry),
+								ErrMsg:     err.Error(),
+							}
+							return s.Task(ctx, request, nil, fallbackModel)
+						}
 					}
 				}
+
 				return response, err
 			}
 
@@ -462,7 +343,7 @@ func (s *sMidjourney) Task(ctx context.Context, request *ghttp.Request, fallback
 				ErrMsg:     err.Error(),
 			}
 
-			return s.Task(ctx, request, fallbackModel, append(retry, 1)...)
+			return s.Task(ctx, request, fallbackModelAgent, fallbackModel, append(retry, 1)...)
 		}
 
 		return response, err
@@ -492,7 +373,7 @@ func (s *sMidjourney) Task(ctx context.Context, request *ghttp.Request, fallback
 }
 
 // 保存日志
-func (s *sMidjourney) SaveLog(ctx context.Context, reqModel, realModel, fallbackModel *model.Model, key *model.Key, response model.MidjourneyResponse, retryInfo *mcommon.Retry, retry ...int) {
+func (s *sMidjourney) SaveLog(ctx context.Context, reqModel, realModel *model.Model, fallbackModelAgent *model.ModelAgent, fallbackModel *model.Model, key *model.Key, response model.MidjourneyResponse, retryInfo *mcommon.Retry, retry ...int) {
 
 	now := gtime.TimestampMilli()
 	defer func() {
@@ -564,12 +445,21 @@ func (s *sMidjourney) SaveLog(ctx context.Context, reqModel, realModel, fallback
 
 	midjourney.TotalTokens = response.Usage.TotalTokens
 
-	if fallbackModel != nil {
+	if fallbackModelAgent != nil {
 		midjourney.IsEnableFallback = true
 		midjourney.FallbackConfig = &mcommon.FallbackConfig{
-			FallbackModel:     fallbackModel.Model,
-			FallbackModelName: fallbackModel.Name,
+			ModelAgent:     fallbackModelAgent.Id,
+			ModelAgentName: fallbackModelAgent.Name,
 		}
+	}
+
+	if fallbackModel != nil {
+		midjourney.IsEnableFallback = true
+		if midjourney.FallbackConfig == nil {
+			midjourney.FallbackConfig = new(mcommon.FallbackConfig)
+		}
+		midjourney.FallbackConfig.Model = fallbackModel.Model
+		midjourney.FallbackConfig.ModelName = fallbackModel.Name
 	}
 
 	if key != nil {
@@ -609,7 +499,7 @@ func (s *sMidjourney) SaveLog(ctx context.Context, reqModel, realModel, fallback
 	if _, err := dao.Midjourney.Insert(ctx, midjourney); err != nil {
 		logger.Error(ctx, err)
 
-		if len(retry) == 5 {
+		if len(retry) == 10 {
 			panic(err)
 		}
 
@@ -619,6 +509,6 @@ func (s *sMidjourney) SaveLog(ctx context.Context, reqModel, realModel, fallback
 
 		logger.Errorf(ctx, "sMidjourney SaveLog retry: %d", len(retry))
 
-		s.SaveLog(ctx, reqModel, realModel, fallbackModel, key, response, retryInfo, retry...)
+		s.SaveLog(ctx, reqModel, realModel, fallbackModelAgent, fallbackModel, key, response, retryInfo, retry...)
 	}
 }

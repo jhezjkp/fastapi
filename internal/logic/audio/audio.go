@@ -34,7 +34,7 @@ func New() service.IAudio {
 }
 
 // Speech
-func (s *sAudio) Speech(ctx context.Context, params sdkm.SpeechRequest, fallbackModel *model.Model, retry ...int) (response sdkm.SpeechResponse, err error) {
+func (s *sAudio) Speech(ctx context.Context, params sdkm.SpeechRequest, fallbackModelAgent *model.ModelAgent, fallbackModel *model.Model, retry ...int) (response sdkm.SpeechResponse, err error) {
 
 	now := gtime.TimestampMilli()
 	defer func() {
@@ -42,16 +42,12 @@ func (s *sAudio) Speech(ctx context.Context, params sdkm.SpeechRequest, fallback
 	}()
 
 	var (
+		mak = &common.MAK{
+			Model:              gconv.String(params.Model),
+			FallbackModelAgent: fallbackModelAgent,
+			FallbackModel:      fallbackModel,
+		}
 		client      sdk.Client
-		reqModel    *model.Model
-		realModel   = new(model.Model)
-		k           *model.Key
-		modelAgent  *model.ModelAgent
-		key         string
-		baseUrl     string
-		path        string
-		agentTotal  int
-		keyTotal    int
 		retryInfo   *mcommon.Retry
 		totalTokens int
 	)
@@ -63,16 +59,16 @@ func (s *sAudio) Speech(ctx context.Context, params sdkm.SpeechRequest, fallback
 
 		if retryInfo == nil && (err == nil || common.IsAborted(err)) {
 
-			if reqModel != nil {
-				if reqModel.AudioQuota.BillingMethod == 1 {
-					totalTokens = int(math.Ceil(float64(len(params.Input)) * reqModel.AudioQuota.PromptRatio))
+			if mak.ReqModel != nil {
+				if mak.ReqModel.AudioQuota.BillingMethod == 1 {
+					totalTokens = int(math.Ceil(float64(len(params.Input)) * mak.ReqModel.AudioQuota.PromptRatio))
 				} else {
-					totalTokens = reqModel.AudioQuota.FixedQuota
+					totalTokens = mak.ReqModel.AudioQuota.FixedQuota
 				}
 			}
 
 			if err := grpool.Add(gctx.NeverDone(ctx), func(ctx context.Context) {
-				if err := service.Common().RecordUsage(ctx, totalTokens, k.Key); err != nil {
+				if err := service.Common().RecordUsage(ctx, totalTokens, mak.Key.Key); err != nil {
 					logger.Error(ctx, err)
 					panic(err)
 				}
@@ -83,7 +79,7 @@ func (s *sAudio) Speech(ctx context.Context, params sdkm.SpeechRequest, fallback
 
 		if err := grpool.Add(gctx.NeverDone(ctx), func(ctx context.Context) {
 
-			realModel.ModelAgent = modelAgent
+			mak.RealModel.ModelAgent = mak.ModelAgent
 
 			audioReq := &model.AudioReq{
 				Input: params.Input,
@@ -101,112 +97,22 @@ func (s *sAudio) Speech(ctx context.Context, params sdkm.SpeechRequest, fallback
 				audioRes.TotalTokens = totalTokens
 			}
 
-			s.SaveLog(ctx, reqModel, realModel, fallbackModel, k, audioReq, audioRes, retryInfo)
+			s.SaveLog(ctx, mak.ReqModel, mak.RealModel, fallbackModelAgent, fallbackModel, mak.Key, audioReq, audioRes, retryInfo)
 
 		}); err != nil {
 			logger.Error(ctx, err)
 		}
 	}()
 
-	if reqModel, err = service.Model().GetModelBySecretKey(ctx, gconv.String(params.Model), service.Session().GetSecretKey(ctx)); err != nil {
+	if err = mak.InitMAK(ctx); err != nil {
 		logger.Error(ctx, err)
 		return response, err
 	}
 
-	if fallbackModel != nil {
-		*realModel = *fallbackModel
-	} else {
-		*realModel = *reqModel
-	}
-
-	baseUrl = realModel.BaseUrl
-	path = realModel.Path
-
-	if realModel.IsEnableModelAgent {
-
-		if agentTotal, modelAgent, err = service.ModelAgent().PickModelAgent(ctx, realModel); err != nil {
-			logger.Error(ctx, err)
-
-			if realModel.IsEnableFallback {
-				if fallbackModel, _ = service.Model().GetFallbackModel(ctx, realModel); fallbackModel != nil {
-					retryInfo = &mcommon.Retry{
-						IsRetry:    true,
-						RetryCount: len(retry),
-						ErrMsg:     err.Error(),
-					}
-					return s.Speech(ctx, params, fallbackModel)
-				}
-			}
-
-			return response, err
-		}
-
-		if modelAgent != nil {
-
-			baseUrl = modelAgent.BaseUrl
-			path = modelAgent.Path
-
-			if keyTotal, k, err = service.ModelAgent().PickModelAgentKey(ctx, modelAgent); err != nil {
-				logger.Error(ctx, err)
-
-				service.ModelAgent().RecordErrorModelAgent(ctx, realModel, modelAgent)
-
-				if errors.Is(err, errors.ERR_NO_AVAILABLE_MODEL_AGENT_KEY) {
-					service.ModelAgent().DisabledModelAgent(ctx, modelAgent, "No available model agent key")
-				}
-
-				if realModel.IsEnableFallback {
-					if fallbackModel, _ = service.Model().GetFallbackModel(ctx, realModel); fallbackModel != nil {
-						retryInfo = &mcommon.Retry{
-							IsRetry:    true,
-							RetryCount: len(retry),
-							ErrMsg:     err.Error(),
-						}
-						return s.Speech(ctx, params, fallbackModel)
-					}
-				}
-
-				return response, err
-			}
-		}
-
-	} else {
-		if keyTotal, k, err = service.Key().PickModelKey(ctx, realModel); err != nil {
-			logger.Error(ctx, err)
-
-			if realModel.IsEnableFallback {
-				if fallbackModel, _ = service.Model().GetFallbackModel(ctx, realModel); fallbackModel != nil {
-					retryInfo = &mcommon.Retry{
-						IsRetry:    true,
-						RetryCount: len(retry),
-						ErrMsg:     err.Error(),
-					}
-					return s.Speech(ctx, params, fallbackModel)
-				}
-			}
-
-			return response, err
-		}
-	}
-
 	request := params
-	key = k.Key
 
-	client, err = common.NewClient(ctx, realModel, key, baseUrl, path)
-	if err != nil {
+	if client, err = common.NewClient(ctx, mak.RealModel, mak.RealKey, mak.BaseUrl, mak.Path); err != nil {
 		logger.Error(ctx, err)
-
-		if realModel.IsEnableFallback {
-			if fallbackModel, _ = service.Model().GetFallbackModel(ctx, realModel); fallbackModel != nil {
-				retryInfo = &mcommon.Retry{
-					IsRetry:    true,
-					RetryCount: len(retry),
-					ErrMsg:     err.Error(),
-				}
-				return s.Speech(ctx, params, fallbackModel)
-			}
-		}
-
 		return response, err
 	}
 
@@ -215,16 +121,16 @@ func (s *sAudio) Speech(ctx context.Context, params sdkm.SpeechRequest, fallback
 		logger.Error(ctx, err)
 
 		// 记录错误次数和禁用
-		service.Common().RecordError(ctx, realModel, k, modelAgent)
+		service.Common().RecordError(ctx, mak.RealModel, mak.Key, mak.ModelAgent)
 
 		isRetry, isDisabled := common.IsNeedRetry(err)
 
 		if isDisabled {
 			if err := grpool.AddWithRecover(gctx.NeverDone(ctx), func(ctx context.Context) {
-				if realModel.IsEnableModelAgent {
-					service.ModelAgent().DisabledModelAgentKey(ctx, k, err.Error())
+				if mak.RealModel.IsEnableModelAgent {
+					service.ModelAgent().DisabledModelAgentKey(ctx, mak.Key, err.Error())
 				} else {
-					service.Key().DisabledModelKey(ctx, k, err.Error())
+					service.Key().DisabledModelKey(ctx, mak.Key, err.Error())
 				}
 			}, nil); err != nil {
 				logger.Error(ctx, err)
@@ -233,17 +139,33 @@ func (s *sAudio) Speech(ctx context.Context, params sdkm.SpeechRequest, fallback
 
 		if isRetry {
 
-			if common.IsMaxRetry(realModel.IsEnableModelAgent, agentTotal, keyTotal, len(retry)) {
-				if realModel.IsEnableFallback {
-					if fallbackModel, _ = service.Model().GetFallbackModel(ctx, realModel); fallbackModel != nil {
-						retryInfo = &mcommon.Retry{
-							IsRetry:    true,
-							RetryCount: len(retry),
-							ErrMsg:     err.Error(),
+			if common.IsMaxRetry(mak.RealModel.IsEnableModelAgent, mak.AgentTotal, mak.KeyTotal, len(retry)) {
+
+				if mak.RealModel.IsEnableFallback {
+
+					if mak.RealModel.FallbackConfig.ModelAgent != "" && mak.RealModel.FallbackConfig.ModelAgent != mak.ModelAgent.Id {
+						if fallbackModelAgent, _ = service.ModelAgent().GetFallbackModelAgent(ctx, mak.RealModel); fallbackModelAgent != nil {
+							retryInfo = &mcommon.Retry{
+								IsRetry:    true,
+								RetryCount: len(retry),
+								ErrMsg:     err.Error(),
+							}
+							return s.Speech(ctx, params, fallbackModelAgent, fallbackModel)
 						}
-						return s.Speech(ctx, params, fallbackModel)
+					}
+
+					if mak.RealModel.FallbackConfig.Model != "" {
+						if fallbackModel, _ = service.Model().GetFallbackModel(ctx, mak.RealModel); fallbackModel != nil {
+							retryInfo = &mcommon.Retry{
+								IsRetry:    true,
+								RetryCount: len(retry),
+								ErrMsg:     err.Error(),
+							}
+							return s.Speech(ctx, params, nil, fallbackModel)
+						}
 					}
 				}
+
 				return response, err
 			}
 
@@ -253,7 +175,7 @@ func (s *sAudio) Speech(ctx context.Context, params sdkm.SpeechRequest, fallback
 				ErrMsg:     err.Error(),
 			}
 
-			return s.Speech(ctx, params, fallbackModel, append(retry, 1)...)
+			return s.Speech(ctx, params, fallbackModelAgent, fallbackModel, append(retry, 1)...)
 		}
 
 		return response, err
@@ -263,7 +185,7 @@ func (s *sAudio) Speech(ctx context.Context, params sdkm.SpeechRequest, fallback
 }
 
 // Transcriptions
-func (s *sAudio) Transcriptions(ctx context.Context, params *v1.TranscriptionsReq, fallbackModel *model.Model, retry ...int) (response sdkm.AudioResponse, err error) {
+func (s *sAudio) Transcriptions(ctx context.Context, params *v1.TranscriptionsReq, fallbackModelAgent *model.ModelAgent, fallbackModel *model.Model, retry ...int) (response sdkm.AudioResponse, err error) {
 
 	now := gtime.TimestampMilli()
 	defer func() {
@@ -271,16 +193,12 @@ func (s *sAudio) Transcriptions(ctx context.Context, params *v1.TranscriptionsRe
 	}()
 
 	var (
+		mak = &common.MAK{
+			Model:              gconv.String(params.Model),
+			FallbackModelAgent: fallbackModelAgent,
+			FallbackModel:      fallbackModel,
+		}
 		client      sdk.Client
-		reqModel    *model.Model
-		realModel   = new(model.Model)
-		k           *model.Key
-		modelAgent  *model.ModelAgent
-		key         string
-		baseUrl     string
-		path        string
-		agentTotal  int
-		keyTotal    int
 		retryInfo   *mcommon.Retry
 		minute      float64
 		totalTokens int
@@ -300,16 +218,16 @@ func (s *sAudio) Transcriptions(ctx context.Context, params *v1.TranscriptionsRe
 				response.Duration = params.Duration
 			}
 
-			if reqModel != nil {
-				if reqModel.AudioQuota.BillingMethod == 1 {
-					totalTokens = int(math.Ceil(minute * 1000 * reqModel.AudioQuota.CompletionRatio))
+			if mak.ReqModel != nil {
+				if mak.ReqModel.AudioQuota.BillingMethod == 1 {
+					totalTokens = int(math.Ceil(minute * 1000 * mak.ReqModel.AudioQuota.CompletionRatio))
 				} else {
-					totalTokens = reqModel.AudioQuota.FixedQuota
+					totalTokens = mak.ReqModel.AudioQuota.FixedQuota
 				}
 			}
 
 			if err := grpool.Add(gctx.NeverDone(ctx), func(ctx context.Context) {
-				if err := service.Common().RecordUsage(ctx, totalTokens, k.Key); err != nil {
+				if err := service.Common().RecordUsage(ctx, totalTokens, mak.Key.Key); err != nil {
 					logger.Error(ctx, err)
 					panic(err)
 				}
@@ -320,7 +238,7 @@ func (s *sAudio) Transcriptions(ctx context.Context, params *v1.TranscriptionsRe
 
 		if err := grpool.Add(gctx.NeverDone(ctx), func(ctx context.Context) {
 
-			realModel.ModelAgent = modelAgent
+			mak.RealModel.ModelAgent = mak.ModelAgent
 
 			audioReq := &model.AudioReq{
 				FilePath: params.FilePath,
@@ -339,112 +257,22 @@ func (s *sAudio) Transcriptions(ctx context.Context, params *v1.TranscriptionsRe
 				audioRes.TotalTokens = totalTokens
 			}
 
-			s.SaveLog(ctx, reqModel, realModel, fallbackModel, k, audioReq, audioRes, retryInfo)
+			s.SaveLog(ctx, mak.ReqModel, mak.RealModel, fallbackModelAgent, fallbackModel, mak.Key, audioReq, audioRes, retryInfo)
 
 		}); err != nil {
 			logger.Error(ctx, err)
 		}
 	}()
 
-	if reqModel, err = service.Model().GetModelBySecretKey(ctx, gconv.String(params.Model), service.Session().GetSecretKey(ctx)); err != nil {
+	if err = mak.InitMAK(ctx); err != nil {
 		logger.Error(ctx, err)
 		return response, err
 	}
 
-	if fallbackModel != nil {
-		*realModel = *fallbackModel
-	} else {
-		*realModel = *reqModel
-	}
-
-	baseUrl = realModel.BaseUrl
-	path = realModel.Path
-
-	if realModel.IsEnableModelAgent {
-
-		if agentTotal, modelAgent, err = service.ModelAgent().PickModelAgent(ctx, realModel); err != nil {
-			logger.Error(ctx, err)
-
-			if realModel.IsEnableFallback {
-				if fallbackModel, _ = service.Model().GetFallbackModel(ctx, realModel); fallbackModel != nil {
-					retryInfo = &mcommon.Retry{
-						IsRetry:    true,
-						RetryCount: len(retry),
-						ErrMsg:     err.Error(),
-					}
-					return s.Transcriptions(ctx, params, fallbackModel)
-				}
-			}
-
-			return response, err
-		}
-
-		if modelAgent != nil {
-
-			baseUrl = modelAgent.BaseUrl
-			path = modelAgent.Path
-
-			if keyTotal, k, err = service.ModelAgent().PickModelAgentKey(ctx, modelAgent); err != nil {
-				logger.Error(ctx, err)
-
-				service.ModelAgent().RecordErrorModelAgent(ctx, realModel, modelAgent)
-
-				if errors.Is(err, errors.ERR_NO_AVAILABLE_MODEL_AGENT_KEY) {
-					service.ModelAgent().DisabledModelAgent(ctx, modelAgent, "No available model agent key")
-				}
-
-				if realModel.IsEnableFallback {
-					if fallbackModel, _ = service.Model().GetFallbackModel(ctx, realModel); fallbackModel != nil {
-						retryInfo = &mcommon.Retry{
-							IsRetry:    true,
-							RetryCount: len(retry),
-							ErrMsg:     err.Error(),
-						}
-						return s.Transcriptions(ctx, params, fallbackModel)
-					}
-				}
-
-				return response, err
-			}
-		}
-
-	} else {
-		if keyTotal, k, err = service.Key().PickModelKey(ctx, realModel); err != nil {
-			logger.Error(ctx, err)
-
-			if realModel.IsEnableFallback {
-				if fallbackModel, _ = service.Model().GetFallbackModel(ctx, realModel); fallbackModel != nil {
-					retryInfo = &mcommon.Retry{
-						IsRetry:    true,
-						RetryCount: len(retry),
-						ErrMsg:     err.Error(),
-					}
-					return s.Transcriptions(ctx, params, fallbackModel)
-				}
-			}
-
-			return response, err
-		}
-	}
-
 	request := params
-	key = k.Key
 
-	client, err = common.NewClient(ctx, realModel, key, baseUrl, path)
-	if err != nil {
+	if client, err = common.NewClient(ctx, mak.RealModel, mak.RealKey, mak.BaseUrl, mak.Path); err != nil {
 		logger.Error(ctx, err)
-
-		if realModel.IsEnableFallback {
-			if fallbackModel, _ = service.Model().GetFallbackModel(ctx, realModel); fallbackModel != nil {
-				retryInfo = &mcommon.Retry{
-					IsRetry:    true,
-					RetryCount: len(retry),
-					ErrMsg:     err.Error(),
-				}
-				return s.Transcriptions(ctx, params, fallbackModel)
-			}
-		}
-
 		return response, err
 	}
 
@@ -453,16 +281,16 @@ func (s *sAudio) Transcriptions(ctx context.Context, params *v1.TranscriptionsRe
 		logger.Error(ctx, err)
 
 		// 记录错误次数和禁用
-		service.Common().RecordError(ctx, realModel, k, modelAgent)
+		service.Common().RecordError(ctx, mak.RealModel, mak.Key, mak.ModelAgent)
 
 		isRetry, isDisabled := common.IsNeedRetry(err)
 
 		if isDisabled {
 			if err := grpool.AddWithRecover(gctx.NeverDone(ctx), func(ctx context.Context) {
-				if realModel.IsEnableModelAgent {
-					service.ModelAgent().DisabledModelAgentKey(ctx, k, err.Error())
+				if mak.RealModel.IsEnableModelAgent {
+					service.ModelAgent().DisabledModelAgentKey(ctx, mak.Key, err.Error())
 				} else {
-					service.Key().DisabledModelKey(ctx, k, err.Error())
+					service.Key().DisabledModelKey(ctx, mak.Key, err.Error())
 				}
 			}, nil); err != nil {
 				logger.Error(ctx, err)
@@ -471,17 +299,33 @@ func (s *sAudio) Transcriptions(ctx context.Context, params *v1.TranscriptionsRe
 
 		if isRetry {
 
-			if common.IsMaxRetry(realModel.IsEnableModelAgent, agentTotal, keyTotal, len(retry)) {
-				if realModel.IsEnableFallback {
-					if fallbackModel, _ = service.Model().GetFallbackModel(ctx, realModel); fallbackModel != nil {
-						retryInfo = &mcommon.Retry{
-							IsRetry:    true,
-							RetryCount: len(retry),
-							ErrMsg:     err.Error(),
+			if common.IsMaxRetry(mak.RealModel.IsEnableModelAgent, mak.AgentTotal, mak.KeyTotal, len(retry)) {
+
+				if mak.RealModel.IsEnableFallback {
+
+					if mak.RealModel.FallbackConfig.ModelAgent != "" && mak.RealModel.FallbackConfig.ModelAgent != mak.ModelAgent.Id {
+						if fallbackModelAgent, _ = service.ModelAgent().GetFallbackModelAgent(ctx, mak.RealModel); fallbackModelAgent != nil {
+							retryInfo = &mcommon.Retry{
+								IsRetry:    true,
+								RetryCount: len(retry),
+								ErrMsg:     err.Error(),
+							}
+							return s.Transcriptions(ctx, params, fallbackModelAgent, fallbackModel)
 						}
-						return s.Transcriptions(ctx, params, fallbackModel)
+					}
+
+					if mak.RealModel.FallbackConfig.Model != "" {
+						if fallbackModel, _ = service.Model().GetFallbackModel(ctx, mak.RealModel); fallbackModel != nil {
+							retryInfo = &mcommon.Retry{
+								IsRetry:    true,
+								RetryCount: len(retry),
+								ErrMsg:     err.Error(),
+							}
+							return s.Transcriptions(ctx, params, nil, fallbackModel)
+						}
 					}
 				}
+
 				return response, err
 			}
 
@@ -491,7 +335,7 @@ func (s *sAudio) Transcriptions(ctx context.Context, params *v1.TranscriptionsRe
 				ErrMsg:     err.Error(),
 			}
 
-			return s.Transcriptions(ctx, params, fallbackModel, append(retry, 1)...)
+			return s.Transcriptions(ctx, params, fallbackModelAgent, fallbackModel, append(retry, 1)...)
 		}
 
 		return response, err
@@ -501,7 +345,7 @@ func (s *sAudio) Transcriptions(ctx context.Context, params *v1.TranscriptionsRe
 }
 
 // 保存日志
-func (s *sAudio) SaveLog(ctx context.Context, reqModel, realModel, fallbackModel *model.Model, key *model.Key, audioReq *model.AudioReq, audioRes *model.AudioRes, retryInfo *mcommon.Retry, retry ...int) {
+func (s *sAudio) SaveLog(ctx context.Context, reqModel, realModel *model.Model, fallbackModelAgent *model.ModelAgent, fallbackModel *model.Model, key *model.Key, audioReq *model.AudioReq, audioRes *model.AudioRes, retryInfo *mcommon.Retry, retry ...int) {
 
 	now := gtime.TimestampMilli()
 	defer func() {
@@ -569,12 +413,21 @@ func (s *sAudio) SaveLog(ctx context.Context, reqModel, realModel, fallbackModel
 
 	}
 
-	if fallbackModel != nil {
+	if fallbackModelAgent != nil {
 		audio.IsEnableFallback = true
 		audio.FallbackConfig = &mcommon.FallbackConfig{
-			FallbackModel:     fallbackModel.Model,
-			FallbackModelName: fallbackModel.Name,
+			ModelAgent:     fallbackModelAgent.Id,
+			ModelAgentName: fallbackModelAgent.Name,
 		}
+	}
+
+	if fallbackModel != nil {
+		audio.IsEnableFallback = true
+		if audio.FallbackConfig == nil {
+			audio.FallbackConfig = new(mcommon.FallbackConfig)
+		}
+		audio.FallbackConfig.Model = fallbackModel.Model
+		audio.FallbackConfig.ModelName = fallbackModel.Name
 	}
 
 	if key != nil {
@@ -608,7 +461,7 @@ func (s *sAudio) SaveLog(ctx context.Context, reqModel, realModel, fallbackModel
 	if _, err := dao.Audio.Insert(ctx, audio); err != nil {
 		logger.Error(ctx, err)
 
-		if len(retry) == 5 {
+		if len(retry) == 10 {
 			panic(err)
 		}
 
@@ -618,6 +471,6 @@ func (s *sAudio) SaveLog(ctx context.Context, reqModel, realModel, fallbackModel
 
 		logger.Errorf(ctx, "sAudio SaveLog retry: %d", len(retry))
 
-		s.SaveLog(ctx, reqModel, realModel, fallbackModel, key, audioReq, audioRes, retryInfo, retry...)
+		s.SaveLog(ctx, reqModel, realModel, fallbackModelAgent, fallbackModel, key, audioReq, audioRes, retryInfo, retry...)
 	}
 }
