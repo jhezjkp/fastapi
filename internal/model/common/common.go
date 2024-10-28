@@ -40,6 +40,12 @@ type RealtimeQuota struct {
 	FixedQuota int        `bson:"fixed_quota,omitempty" json:"fixed_quota,omitempty"` // 固定额度
 }
 
+type MultimodalAudioQuota struct {
+	TextQuota  TextQuota  `bson:"text_quota,omitempty"  json:"text_quota,omitempty"`  // 文本额度
+	AudioQuota AudioQuota `bson:"audio_quota,omitempty" json:"audio_quota,omitempty"` // 音频额度
+	FixedQuota int        `bson:"fixed_quota,omitempty" json:"fixed_quota,omitempty"` // 固定额度
+}
+
 type MidjourneyQuota struct {
 	Name       string `bson:"name,omitempty"        json:"name,omitempty"`        // 名称
 	Action     string `bson:"action,omitempty"      json:"action,omitempty"`      // 动作[IMAGINE, UPSCALE, VARIATION, ZOOM, PAN, DESCRIBE, BLEND, SHORTEN, SWAP_FACE]
@@ -58,8 +64,10 @@ type ForwardConfig struct {
 }
 
 type FallbackConfig struct {
-	FallbackModel     string `bson:"fallback_model,omitempty"      json:"fallback_model,omitempty"`      // 后备模型
-	FallbackModelName string `bson:"fallback_model_name,omitempty" json:"fallback_model_name,omitempty"` // 后备模型名称
+	ModelAgent     string `bson:"model_agent,omitempty"      json:"model_agent,omitempty"`      // 后备模型代理
+	ModelAgentName string `bson:"model_agent_name,omitempty" json:"model_agent_name,omitempty"` // 后备模型代理名称
+	Model          string `bson:"model,omitempty"            json:"model,omitempty"`            // 后备模型
+	ModelName      string `bson:"model_name,omitempty"       json:"model_name,omitempty"`       // 后备模型名称
 }
 
 type Message struct {
