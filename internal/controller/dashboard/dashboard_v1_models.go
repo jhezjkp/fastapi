@@ -34,7 +34,7 @@ func (c *ControllerV1) Models(ctx context.Context, req *v1.ModelsReq) (res *v1.M
 			}
 
 			modelsData := model.DashboardModelsData{
-				Id:      m.Model,
+				Id:      m.Name,
 				Object:  "model",
 				OwnedBy: gstr.ToLower(corp.Code),
 				Created: gconv.Int(m.CreatedAt / 1000),
