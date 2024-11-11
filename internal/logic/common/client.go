@@ -13,11 +13,11 @@ func NewClient(ctx context.Context, corp string, model *model.Model, key, baseUR
 
 	oss := config.Cfg.Oss
 	if model.IsEnablePresetConfig {
-		return sdk.NewClient(ctx, GetCorpCode(ctx, corp), model.Model, key, baseURL, path, &model.PresetConfig.IsSupportSystemRole,
+		return sdk.NewClient(ctx, GetCorpCode(ctx, model.Corp), model.Model, key, baseURL, path, &model.PresetConfig.IsSupportSystemRole,
 			oss.Endpoint, oss.Region, oss.AccessKey, oss.SecretKey, oss.Bucket, oss.Domain, config.Cfg.Http.ProxyUrl), nil
 	}
 
-	return sdk.NewClient(ctx, GetCorpCode(ctx, corp), model.Model, key, baseURL, path, nil,
+	return sdk.NewClient(ctx, GetCorpCode(ctx, model.Corp), model.Model, key, baseURL, path, nil,
 		oss.Endpoint, oss.Region, oss.AccessKey, oss.SecretKey, oss.Bucket, oss.Domain, config.Cfg.Http.ProxyUrl), nil
 }
 
