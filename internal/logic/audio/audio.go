@@ -111,7 +111,7 @@ func (s *sAudio) Speech(ctx context.Context, params sdkm.SpeechRequest, fallback
 
 	request := params
 
-	if client, err = common.NewClient(ctx, mak.RealModel, mak.RealKey, mak.BaseUrl, mak.Path); err != nil {
+	if client, err = common.NewClient(ctx, mak.Corp, mak.RealModel, mak.RealKey, mak.BaseUrl, mak.Path); err != nil {
 		logger.Error(ctx, err)
 		return response, err
 	}
@@ -150,7 +150,7 @@ func (s *sAudio) Speech(ctx context.Context, params sdkm.SpeechRequest, fallback
 								RetryCount: len(retry),
 								ErrMsg:     err.Error(),
 							}
-							return s.Speech(ctx, params, fallbackModelAgent, fallbackModel)
+							return s.Speech(g.RequestFromCtx(ctx).GetCtx(), params, fallbackModelAgent, fallbackModel)
 						}
 					}
 
@@ -161,7 +161,7 @@ func (s *sAudio) Speech(ctx context.Context, params sdkm.SpeechRequest, fallback
 								RetryCount: len(retry),
 								ErrMsg:     err.Error(),
 							}
-							return s.Speech(ctx, params, nil, fallbackModel)
+							return s.Speech(g.RequestFromCtx(ctx).GetCtx(), params, nil, fallbackModel)
 						}
 					}
 				}
@@ -175,7 +175,7 @@ func (s *sAudio) Speech(ctx context.Context, params sdkm.SpeechRequest, fallback
 				ErrMsg:     err.Error(),
 			}
 
-			return s.Speech(ctx, params, fallbackModelAgent, fallbackModel, append(retry, 1)...)
+			return s.Speech(g.RequestFromCtx(ctx).GetCtx(), params, fallbackModelAgent, fallbackModel, append(retry, 1)...)
 		}
 
 		return response, err
@@ -271,7 +271,7 @@ func (s *sAudio) Transcriptions(ctx context.Context, params *v1.TranscriptionsRe
 
 	request := params
 
-	if client, err = common.NewClient(ctx, mak.RealModel, mak.RealKey, mak.BaseUrl, mak.Path); err != nil {
+	if client, err = common.NewClient(ctx, mak.Corp, mak.RealModel, mak.RealKey, mak.BaseUrl, mak.Path); err != nil {
 		logger.Error(ctx, err)
 		return response, err
 	}
@@ -310,7 +310,7 @@ func (s *sAudio) Transcriptions(ctx context.Context, params *v1.TranscriptionsRe
 								RetryCount: len(retry),
 								ErrMsg:     err.Error(),
 							}
-							return s.Transcriptions(ctx, params, fallbackModelAgent, fallbackModel)
+							return s.Transcriptions(g.RequestFromCtx(ctx).GetCtx(), params, fallbackModelAgent, fallbackModel)
 						}
 					}
 
@@ -321,7 +321,7 @@ func (s *sAudio) Transcriptions(ctx context.Context, params *v1.TranscriptionsRe
 								RetryCount: len(retry),
 								ErrMsg:     err.Error(),
 							}
-							return s.Transcriptions(ctx, params, nil, fallbackModel)
+							return s.Transcriptions(g.RequestFromCtx(ctx).GetCtx(), params, nil, fallbackModel)
 						}
 					}
 				}
@@ -335,7 +335,7 @@ func (s *sAudio) Transcriptions(ctx context.Context, params *v1.TranscriptionsRe
 				ErrMsg:     err.Error(),
 			}
 
-			return s.Transcriptions(ctx, params, fallbackModelAgent, fallbackModel, append(retry, 1)...)
+			return s.Transcriptions(g.RequestFromCtx(ctx).GetCtx(), params, fallbackModelAgent, fallbackModel, append(retry, 1)...)
 		}
 
 		return response, err

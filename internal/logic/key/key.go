@@ -15,9 +15,9 @@ import (
 	"github.com/iimeta/fastapi/internal/model/entity"
 	"github.com/iimeta/fastapi/internal/service"
 	"github.com/iimeta/fastapi/utility/cache"
+	"github.com/iimeta/fastapi/utility/lb"
 	"github.com/iimeta/fastapi/utility/logger"
 	"github.com/iimeta/fastapi/utility/redis"
-	"github.com/iimeta/fastapi/utility/util"
 	"go.mongodb.org/mongo-driver/bson"
 	"slices"
 )
@@ -59,6 +59,7 @@ func (s *sKey) GetKey(ctx context.Context, secretKey string) (*model.Key, error)
 		Corp:           key.Corp,
 		Key:            key.Key,
 		Type:           key.Type,
+		Weight:         key.Weight,
 		Models:         key.Models,
 		ModelAgents:    key.ModelAgents,
 		IsLimitQuota:   key.IsLimitQuota,
@@ -96,6 +97,7 @@ func (s *sKey) GetModelKeys(ctx context.Context, id string) ([]*model.Key, error
 			Corp:           result.Corp,
 			Key:            result.Key,
 			Type:           result.Type,
+			Weight:         result.Weight,
 			Models:         result.Models,
 			ModelAgents:    result.ModelAgents,
 			IsLimitQuota:   result.IsLimitQuota,
@@ -140,6 +142,7 @@ func (s *sKey) List(ctx context.Context, typ int) ([]*model.Key, error) {
 			Corp:           result.Corp,
 			Key:            result.Key,
 			Type:           result.Type,
+			Weight:         result.Weight,
 			Models:         result.Models,
 			ModelAgents:    result.ModelAgents,
 			IsLimitQuota:   result.IsLimitQuota,
@@ -167,7 +170,7 @@ func (s *sKey) PickModelKey(ctx context.Context, m *model.Model) (int, *model.Ke
 
 	var (
 		modelKeys  []*model.Key
-		roundRobin *util.RoundRobin
+		roundRobin *lb.RoundRobin
 		err        error
 	)
 
@@ -212,12 +215,38 @@ func (s *sKey) PickModelKey(ctx context.Context, m *model.Model) (int, *model.Ke
 		return 0, nil, errors.ERR_NO_AVAILABLE_KEY
 	}
 
+	filterKeyList := make([]*model.Key, 0)
+	if len(keyList) > 1 {
+		errorKeys := service.Session().GetErrorKeys(ctx)
+		if len(errorKeys) > 0 {
+			for _, key := range keyList {
+				// 过滤错误的模型代理密钥
+				if !slices.Contains(errorKeys, key.Id) {
+					filterKeyList = append(filterKeyList, key)
+				}
+			}
+		} else {
+			filterKeyList = keyList
+		}
+	} else {
+		filterKeyList = keyList
+	}
+
+	if len(filterKeyList) == 0 {
+		return 0, nil, errors.ERR_ALL_KEY
+	}
+
+	// 负载策略-权重
+	if m.LbStrategy == 2 {
+		return len(filterKeyList), lb.NewKeyWeight(filterKeyList).PickKey(), nil
+	}
+
 	if roundRobinValue := s.modelKeysRoundRobinCache.GetVal(ctx, m.Id); roundRobinValue != nil {
-		roundRobin = roundRobinValue.(*util.RoundRobin)
+		roundRobin = roundRobinValue.(*lb.RoundRobin)
 	}
 
 	if roundRobin == nil {
-		roundRobin = new(util.RoundRobin)
+		roundRobin = lb.NewRoundRobin()
 		if err = s.modelKeysRoundRobinCache.Set(ctx, m.Id, roundRobin, 0); err != nil {
 			logger.Error(ctx, err)
 			return 0, nil, err
@@ -295,6 +324,7 @@ func (s *sKey) DisabledModelKey(ctx context.Context, key *model.Key, disabledRea
 		Corp:               key.Corp,
 		Key:                key.Key,
 		Type:               key.Type,
+		Weight:             key.Weight,
 		Models:             key.Models,
 		ModelAgents:        key.ModelAgents,
 		IsLimitQuota:       key.IsLimitQuota,
@@ -419,6 +449,7 @@ func (s *sKey) CreateCacheModelKey(ctx context.Context, key *entity.Key) {
 		Corp:           key.Corp,
 		Key:            key.Key,
 		Type:           key.Type,
+		Weight:         key.Weight,
 		Models:         key.Models,
 		ModelAgents:    key.ModelAgents,
 		IsLimitQuota:   key.IsLimitQuota,
@@ -461,6 +492,7 @@ func (s *sKey) UpdateCacheModelKey(ctx context.Context, oldData *entity.Key, new
 		Corp:               newData.Corp,
 		Key:                newData.Key,
 		Type:               newData.Type,
+		Weight:             newData.Weight,
 		Models:             newData.Models,
 		ModelAgents:        newData.ModelAgents,
 		IsLimitQuota:       newData.IsLimitQuota,
