@@ -167,7 +167,7 @@ func (s *sChat) SmartCompletions(ctx context.Context, params sdkm.ChatCompletion
 		}
 	}
 
-	if client, err = common.NewClient(ctx, mak.RealModel, mak.RealKey, mak.BaseUrl, mak.Path); err != nil {
+	if client, err = common.NewClient(ctx, mak.Corp, mak.RealModel, mak.RealKey, mak.BaseUrl, mak.Path); err != nil {
 		logger.Error(ctx, err)
 		return response, err
 	}
@@ -203,7 +203,7 @@ func (s *sChat) SmartCompletions(ctx context.Context, params sdkm.ChatCompletion
 								RetryCount: len(retry),
 								ErrMsg:     err.Error(),
 							}
-							return s.SmartCompletions(ctx, params, reqModel, fallbackModelAgent, fallbackModel)
+							return s.SmartCompletions(g.RequestFromCtx(ctx).GetCtx(), params, reqModel, fallbackModelAgent, fallbackModel)
 						}
 					}
 
@@ -214,7 +214,7 @@ func (s *sChat) SmartCompletions(ctx context.Context, params sdkm.ChatCompletion
 								RetryCount: len(retry),
 								ErrMsg:     err.Error(),
 							}
-							return s.SmartCompletions(ctx, params, reqModel, nil, fallbackModel)
+							return s.SmartCompletions(g.RequestFromCtx(ctx).GetCtx(), params, reqModel, nil, fallbackModel)
 						}
 					}
 				}
@@ -228,7 +228,7 @@ func (s *sChat) SmartCompletions(ctx context.Context, params sdkm.ChatCompletion
 				ErrMsg:     err.Error(),
 			}
 
-			return s.SmartCompletions(ctx, params, reqModel, fallbackModelAgent, fallbackModel, append(retry, 1)...)
+			return s.SmartCompletions(g.RequestFromCtx(ctx).GetCtx(), params, reqModel, fallbackModelAgent, fallbackModel, append(retry, 1)...)
 		}
 
 		return response, err

@@ -108,7 +108,7 @@ func (s *sImage) Generations(ctx context.Context, params sdkm.ImageRequest, fall
 		request.Model = mak.RealModel.Model
 	}
 
-	if client, err = common.NewClient(ctx, mak.RealModel, mak.RealKey, mak.BaseUrl, mak.Path); err != nil {
+	if client, err = common.NewClient(ctx, mak.Corp, mak.RealModel, mak.RealKey, mak.BaseUrl, mak.Path); err != nil {
 		logger.Error(ctx, err)
 		return response, err
 	}
@@ -147,7 +147,7 @@ func (s *sImage) Generations(ctx context.Context, params sdkm.ImageRequest, fall
 								RetryCount: len(retry),
 								ErrMsg:     err.Error(),
 							}
-							return s.Generations(ctx, params, fallbackModelAgent, fallbackModel)
+							return s.Generations(g.RequestFromCtx(ctx).GetCtx(), params, fallbackModelAgent, fallbackModel)
 						}
 					}
 
@@ -158,7 +158,7 @@ func (s *sImage) Generations(ctx context.Context, params sdkm.ImageRequest, fall
 								RetryCount: len(retry),
 								ErrMsg:     err.Error(),
 							}
-							return s.Generations(ctx, params, nil, fallbackModel)
+							return s.Generations(g.RequestFromCtx(ctx).GetCtx(), params, nil, fallbackModel)
 						}
 					}
 				}
@@ -172,7 +172,7 @@ func (s *sImage) Generations(ctx context.Context, params sdkm.ImageRequest, fall
 				ErrMsg:     err.Error(),
 			}
 
-			return s.Generations(ctx, params, fallbackModelAgent, fallbackModel, append(retry, 1)...)
+			return s.Generations(g.RequestFromCtx(ctx).GetCtx(), params, fallbackModelAgent, fallbackModel, append(retry, 1)...)
 		}
 
 		return response, err

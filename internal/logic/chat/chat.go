@@ -26,10 +26,13 @@ import (
 	"io"
 	"math"
 	"slices"
+	"sync"
 	"time"
 )
 
-type sChat struct{}
+type sChat struct {
+	mutex sync.Mutex
+}
 
 func init() {
 	service.RegisterChat(New())
@@ -252,7 +255,7 @@ func (s *sChat) Completions(ctx context.Context, params sdkm.ChatCompletionReque
 		}
 	}
 
-	if client, err = common.NewClient(ctx, mak.RealModel, mak.RealKey, mak.BaseUrl, mak.Path); err != nil {
+	if client, err = common.NewClient(ctx, mak.Corp, mak.RealModel, mak.RealKey, mak.BaseUrl, mak.Path); err != nil {
 		logger.Error(ctx, err)
 		return response, err
 	}
@@ -291,7 +294,7 @@ func (s *sChat) Completions(ctx context.Context, params sdkm.ChatCompletionReque
 								RetryCount: len(retry),
 								ErrMsg:     err.Error(),
 							}
-							return s.Completions(ctx, params, fallbackModelAgent, fallbackModel)
+							return s.Completions(g.RequestFromCtx(ctx).GetCtx(), params, fallbackModelAgent, fallbackModel)
 						}
 					}
 
@@ -302,7 +305,7 @@ func (s *sChat) Completions(ctx context.Context, params sdkm.ChatCompletionReque
 								RetryCount: len(retry),
 								ErrMsg:     err.Error(),
 							}
-							return s.Completions(ctx, params, nil, fallbackModel)
+							return s.Completions(g.RequestFromCtx(ctx).GetCtx(), params, nil, fallbackModel)
 						}
 					}
 				}
@@ -316,7 +319,7 @@ func (s *sChat) Completions(ctx context.Context, params sdkm.ChatCompletionReque
 				ErrMsg:     err.Error(),
 			}
 
-			return s.Completions(ctx, params, fallbackModelAgent, fallbackModel, append(retry, 1)...)
+			return s.Completions(g.RequestFromCtx(ctx).GetCtx(), params, fallbackModelAgent, fallbackModel, append(retry, 1)...)
 		}
 
 		return response, err
@@ -513,7 +516,7 @@ func (s *sChat) CompletionsStream(ctx context.Context, params sdkm.ChatCompletio
 		}
 	}
 
-	if client, err = common.NewClient(ctx, mak.RealModel, mak.RealKey, mak.BaseUrl, mak.Path); err != nil {
+	if client, err = common.NewClient(ctx, mak.Corp, mak.RealModel, mak.RealKey, mak.BaseUrl, mak.Path); err != nil {
 		logger.Error(ctx, err)
 		return err
 	}
@@ -552,7 +555,7 @@ func (s *sChat) CompletionsStream(ctx context.Context, params sdkm.ChatCompletio
 								RetryCount: len(retry),
 								ErrMsg:     err.Error(),
 							}
-							return s.CompletionsStream(ctx, params, fallbackModelAgent, fallbackModel)
+							return s.CompletionsStream(g.RequestFromCtx(ctx).GetCtx(), params, fallbackModelAgent, fallbackModel)
 						}
 					}
 
@@ -563,7 +566,7 @@ func (s *sChat) CompletionsStream(ctx context.Context, params sdkm.ChatCompletio
 								RetryCount: len(retry),
 								ErrMsg:     err.Error(),
 							}
-							return s.CompletionsStream(ctx, params, nil, fallbackModel)
+							return s.CompletionsStream(g.RequestFromCtx(ctx).GetCtx(), params, nil, fallbackModel)
 						}
 					}
 				}
@@ -577,7 +580,7 @@ func (s *sChat) CompletionsStream(ctx context.Context, params sdkm.ChatCompletio
 				ErrMsg:     err.Error(),
 			}
 
-			return s.CompletionsStream(ctx, params, fallbackModelAgent, fallbackModel, append(retry, 1)...)
+			return s.CompletionsStream(g.RequestFromCtx(ctx).GetCtx(), params, fallbackModelAgent, fallbackModel, append(retry, 1)...)
 		}
 
 		return err
@@ -658,7 +661,7 @@ func (s *sChat) CompletionsStream(ctx context.Context, params sdkm.ChatCompletio
 									RetryCount: len(retry),
 									ErrMsg:     err.Error(),
 								}
-								return s.CompletionsStream(ctx, params, fallbackModelAgent, fallbackModel)
+								return s.CompletionsStream(g.RequestFromCtx(ctx).GetCtx(), params, fallbackModelAgent, fallbackModel)
 							}
 						}
 
@@ -669,7 +672,7 @@ func (s *sChat) CompletionsStream(ctx context.Context, params sdkm.ChatCompletio
 									RetryCount: len(retry),
 									ErrMsg:     err.Error(),
 								}
-								return s.CompletionsStream(ctx, params, nil, fallbackModel)
+								return s.CompletionsStream(g.RequestFromCtx(ctx).GetCtx(), params, nil, fallbackModel)
 							}
 						}
 					}
@@ -683,7 +686,7 @@ func (s *sChat) CompletionsStream(ctx context.Context, params sdkm.ChatCompletio
 					ErrMsg:     err.Error(),
 				}
 
-				return s.CompletionsStream(ctx, params, fallbackModelAgent, fallbackModel, append(retry, 1)...)
+				return s.CompletionsStream(g.RequestFromCtx(ctx).GetCtx(), params, fallbackModelAgent, fallbackModel, append(retry, 1)...)
 			}
 
 			return err
@@ -752,6 +755,8 @@ func (s *sChat) CompletionsStream(ctx context.Context, params sdkm.ChatCompletio
 
 // 保存日志
 func (s *sChat) SaveLog(ctx context.Context, reqModel, realModel *model.Model, fallbackModelAgent *model.ModelAgent, fallbackModel *model.Model, key *model.Key, completionsReq *sdkm.ChatCompletionRequest, completionsRes *model.CompletionsRes, retryInfo *mcommon.Retry, isSmartMatch bool, retry ...int) {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
 
 	now := gtime.TimestampMilli()
 	defer func() {
@@ -790,9 +795,10 @@ func (s *sChat) SaveLog(ctx context.Context, reqModel, realModel *model.Model, f
 
 			if multiContent, ok := prompt.([]interface{}); ok {
 				for _, value := range multiContent {
-					content := value.(map[string]interface{})
-					if content["type"] == "text" {
-						chat.Prompt = gconv.String(content["text"])
+					if content, ok := value.(map[string]interface{}); ok {
+						if content["type"] == "text" {
+							chat.Prompt = gconv.String(content["text"])
+						}
 					}
 				}
 			} else {
@@ -805,16 +811,30 @@ func (s *sChat) SaveLog(ctx context.Context, reqModel, realModel *model.Model, f
 				chat.Prompt = gconv.String(prompt)
 			} else {
 				if multiContent, ok := prompt.([]interface{}); ok {
+
 					for _, value := range multiContent {
-						content := value.(map[string]interface{})
-						if content["type"] == "image_url" {
-							imageUrl := content["image_url"].(map[string]interface{})
-							if !gstr.HasPrefix(gconv.String(imageUrl["url"]), "http") {
-								imageUrl["url"] = "[BASE64图像数据]"
+
+						if content, ok := value.(map[string]interface{}); ok {
+
+							if content["type"] == "image_url" {
+								if imageUrl, ok := content["image_url"].(map[string]interface{}); ok {
+									if !gstr.HasPrefix(gconv.String(imageUrl["url"]), "http") {
+										imageUrl["url"] = "[BASE64图像数据]"
+									}
+								}
+							}
+
+							if content["type"] == "image" {
+								if source, ok := content["source"].(sdkm.Source); ok {
+									source.Data = "[BASE64图像数据]"
+									content["source"] = source
+								}
 							}
 						}
 					}
+
 					chat.Prompt = gconv.String(multiContent)
+
 				} else {
 					chat.Prompt = gconv.String(prompt)
 				}
@@ -908,16 +928,30 @@ func (s *sChat) SaveLog(ctx context.Context, reqModel, realModel *model.Model, f
 			content := message.Content
 
 			if !slices.Contains(config.Cfg.RecordLogs, "image") {
+
 				if multiContent, ok := content.([]interface{}); ok {
+
 					for _, value := range multiContent {
-						content := value.(map[string]interface{})
-						if content["type"] == "image_url" {
-							imageUrl := content["image_url"].(map[string]interface{})
-							if !gstr.HasPrefix(gconv.String(imageUrl["url"]), "http") {
-								imageUrl["url"] = "[BASE64图像数据]"
+
+						if content, ok := value.(map[string]interface{}); ok {
+
+							if content["type"] == "image_url" {
+								if imageUrl, ok := content["image_url"].(map[string]interface{}); ok {
+									if !gstr.HasPrefix(gconv.String(imageUrl["url"]), "http") {
+										imageUrl["url"] = "[BASE64图像数据]"
+									}
+								}
+							}
+
+							if content["type"] == "image" {
+								if source, ok := content["source"].(sdkm.Source); ok {
+									source.Data = "[BASE64图像数据]"
+									content["source"] = source
+								}
 							}
 						}
 					}
+
 					content = gconv.String(multiContent)
 				}
 			}
