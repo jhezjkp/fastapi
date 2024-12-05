@@ -15,6 +15,7 @@ import (
 	"github.com/iimeta/fastapi/utility/logger"
 	"github.com/iimeta/fastapi/utility/redis"
 	"go.mongodb.org/mongo-driver/bson"
+	"time"
 )
 
 type sApp struct {
@@ -390,23 +391,23 @@ func (s *sApp) UpdateCacheAppKey(ctx context.Context, key *entity.Key) {
 	}()
 
 	if err := s.SaveCacheAppKey(ctx, &model.Key{
-		Id:             key.Id,
-		UserId:         key.UserId,
-		AppId:          key.AppId,
-		Corp:           key.Corp,
-		Key:            key.Key,
-		Type:           key.Type,
-		Models:         key.Models,
-		ModelAgents:    key.ModelAgents,
-		IsLimitQuota:   key.IsLimitQuota,
-		Quota:          key.Quota,
-		UsedQuota:      key.UsedQuota,
-		QuotaExpiresAt: key.QuotaExpiresAt,
-		RPM:            key.RPM,
-		RPD:            key.RPD,
-		IpWhitelist:    key.IpWhitelist,
-		IpBlacklist:    key.IpBlacklist,
-		Status:         key.Status,
+		Id:                  key.Id,
+		UserId:              key.UserId,
+		AppId:               key.AppId,
+		Corp:                key.Corp,
+		Key:                 key.Key,
+		Type:                key.Type,
+		Models:              key.Models,
+		ModelAgents:         key.ModelAgents,
+		IsLimitQuota:        key.IsLimitQuota,
+		Quota:               key.Quota,
+		UsedQuota:           key.UsedQuota,
+		QuotaExpiresRule:    key.QuotaExpiresRule,
+		QuotaExpiresAt:      key.QuotaExpiresAt,
+		QuotaExpiresMinutes: key.QuotaExpiresMinutes,
+		IpWhitelist:         key.IpWhitelist,
+		IpBlacklist:         key.IpBlacklist,
+		Status:              key.Status,
 	}); err != nil {
 		logger.Error(ctx, err)
 	}
@@ -507,6 +508,46 @@ func (s *sApp) GetCacheAppKeyQuota(ctx context.Context, secretKey string) int {
 	}
 
 	return 0
+}
+
+// 更新应用密钥额度过期时间
+func (s *sApp) UpdateAppKeyQuotaExpiresAt(ctx context.Context, key *model.Key) error {
+
+	now := gtime.TimestampMilli()
+	defer func() {
+		logger.Debugf(ctx, "sApp UpdateAppKeyQuotaExpiresAt time: %d", gtime.TimestampMilli()-now)
+	}()
+
+	oldData, err := dao.Key.FindById(ctx, key.Id)
+	if err != nil {
+		logger.Error(ctx, err)
+		return err
+	}
+
+	if err = dao.Key.UpdateById(ctx, key.Id, bson.M{
+		"quota_expires_rule": 1,
+		"quota_expires_at":   gtime.Now().Add(time.Duration(key.QuotaExpiresMinutes) * time.Minute).TimestampMilli(),
+	}); err != nil {
+		logger.Error(ctx, err)
+		return err
+	}
+
+	newData, err := dao.Key.FindById(ctx, key.Id)
+	if err != nil {
+		logger.Error(ctx, err)
+		return err
+	}
+
+	if _, err = redis.Publish(ctx, consts.CHANGE_CHANNEL_APP_KEY, model.PubMessage{
+		Action:  consts.ACTION_UPDATE,
+		OldData: oldData,
+		NewData: newData,
+	}); err != nil {
+		logger.Error(ctx, err)
+		return err
+	}
+
+	return nil
 }
 
 // 变更订阅
