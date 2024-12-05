@@ -92,6 +92,8 @@ type Gcp struct {
 
 type Error struct {
 	AutoDisabled []string `json:"auto_disabled"`
+	NotRetry     []string `json:"not_retry"`
+	NotShield    []string `json:"not_shield"`
 }
 
 type Oss struct {
