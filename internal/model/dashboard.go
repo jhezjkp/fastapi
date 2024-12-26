@@ -27,6 +27,7 @@ type DashboardModelsRes struct {
 type DashboardModelsData struct {
 	Id         string       `json:"id"`
 	Object     string       `json:"object"`
+	Type       int          `json:"type"`
 	OwnedBy    string       `json:"owned_by"`
 	Created    int          `json:"created"`
 	Root       string       `json:"root"`
