@@ -498,10 +498,9 @@ func (s *sModel) List(ctx context.Context, ids []string) ([]*model.Model, error)
 		"_id": bson.M{
 			"$in": ids,
 		},
-		"status": 1,
 	}
 
-	results, err := dao.Model.Find(ctx, filter, "-updated_at")
+	results, err := dao.Model.Find(ctx, filter, "status", "-updated_at")
 	if err != nil {
 		logger.Error(ctx, err)
 		return nil, err
@@ -554,7 +553,7 @@ func (s *sModel) ListAll(ctx context.Context) ([]*model.Model, error) {
 
 	filter := bson.M{}
 
-	results, err := dao.Model.Find(ctx, filter, "-updated_at")
+	results, err := dao.Model.Find(ctx, filter, "status", "-updated_at")
 	if err != nil {
 		logger.Error(ctx, err)
 		return nil, err
