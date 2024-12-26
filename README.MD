@@ -1,6 +1,6 @@
 <div align=center>
 
-<img src="https://iim.ai/public/images/logo.png?t=20231207" width="128"/>
+<img src="https://www.fastapi.ai/logo.png" width="128"/>
 
 # 智元 Fast API
 
@@ -16,8 +16,8 @@
 
 | 公司       | Completion | Image | Audio | Multimodal | Realtime | Embedding | Moderation |
 | ---------- | ---------- | ----- | ----- | ---------- | -------- | --------- | ---------- |
-| OpenAI     | ✔️         | ✔️    | ✔️     | ✔️         | ✔️       | ✔️        | ✔️         |
-| Azure      | ✔️         | ✔️    | ✔️     | ✔️         |          | ✔️        | ✔️         |
+| OpenAI     | ✔️         | ✔️    | ✔️    | ✔️         | ✔️       | ✔️        | ✔️         |
+| Azure      | ✔️         | ✔️    | ✔️    | ✔️         |          | ✔️        | ✔️         |
 | 百度       | ✔️         |       |       |            |          |           |            |
 | 科大讯飞   | ✔️         | ✔️    |       |            |          |           |            |
 | 阿里云     | ✔️         |       |       |            |          |           |            |
@@ -64,7 +64,7 @@ https://files.fastapi.ai/public/video/install.mp4
 ## 公益站点
 
 - API地址: https://api.free.fastapi.ai
-- 注册后请联系作者领取1000万额度
+- 注册即送1000万额度, 使用上方API地址调用即可
 
 ## 项目截图
 ### 管理端
@@ -109,7 +109,7 @@ curl --location 'https://api.fastapi.ai/v1/chat/completions' \
 <img src="https://iim.ai/public/images/Author.png?t=20231207" width="320" alt="作者"/>
 
 ## 交流群
-<img src="https://iim.ai/public/images/WeChatGroup.jpg?t=20241128" width="320" alt="交流群"/>
+<img src="https://iim.ai/public/images/WeChatGroup.jpg?t=20241219" width="320" alt="交流群"/>
 
 
 ![Star History Chart](https://api.star-history.com/svg?repos=iimeta/fastapi&type=Date)
