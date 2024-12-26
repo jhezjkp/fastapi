@@ -40,6 +40,13 @@
       with_items: "{{ config_files_to_copy }}"
       when: first_deploy
 
+    - name: Backup existing fastapi binary
+      shell:
+        cmd: "cp /app/fastapi/bin/fastapi /app/fastapi/bin/fastapi.$(date +%Y_%m_%d)"
+      register: backup_result
+      changed_when: backup_result.rc == 0 and backup_result.stderr == ""
+      ignore_errors: yes
+
     - name: Upload and Unzip Bin file
       unarchive:
         src: "{{ item.src }}"
