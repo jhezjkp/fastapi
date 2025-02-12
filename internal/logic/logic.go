@@ -5,6 +5,7 @@
 package logic
 
 import (
+	_ "github.com/iimeta/fastapi/internal/logic/anthropic"
 	_ "github.com/iimeta/fastapi/internal/logic/app"
 	_ "github.com/iimeta/fastapi/internal/logic/audio"
 	_ "github.com/iimeta/fastapi/internal/logic/auth"
@@ -15,6 +16,7 @@ import (
 	_ "github.com/iimeta/fastapi/internal/logic/dashboard"
 	_ "github.com/iimeta/fastapi/internal/logic/embedding"
 	_ "github.com/iimeta/fastapi/internal/logic/file"
+	_ "github.com/iimeta/fastapi/internal/logic/google"
 	_ "github.com/iimeta/fastapi/internal/logic/image"
 	_ "github.com/iimeta/fastapi/internal/logic/key"
 	_ "github.com/iimeta/fastapi/internal/logic/midjourney"
@@ -23,5 +25,6 @@ import (
 	_ "github.com/iimeta/fastapi/internal/logic/moderation"
 	_ "github.com/iimeta/fastapi/internal/logic/realtime"
 	_ "github.com/iimeta/fastapi/internal/logic/session"
+	_ "github.com/iimeta/fastapi/internal/logic/sys_config"
 	_ "github.com/iimeta/fastapi/internal/logic/user"
 )

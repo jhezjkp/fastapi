@@ -9,11 +9,13 @@ import (
 	"github.com/gogf/gf/v2/text/gstr"
 	"github.com/iimeta/fastapi/internal/config"
 	"github.com/iimeta/fastapi/internal/consts"
+	"github.com/iimeta/fastapi/internal/controller/anthropic"
 	"github.com/iimeta/fastapi/internal/controller/audio"
 	"github.com/iimeta/fastapi/internal/controller/chat"
 	"github.com/iimeta/fastapi/internal/controller/dashboard"
 	"github.com/iimeta/fastapi/internal/controller/embedding"
 	"github.com/iimeta/fastapi/internal/controller/file"
+	"github.com/iimeta/fastapi/internal/controller/google"
 	"github.com/iimeta/fastapi/internal/controller/health"
 	"github.com/iimeta/fastapi/internal/controller/image"
 	"github.com/iimeta/fastapi/internal/controller/midjourney"
@@ -78,6 +80,7 @@ var (
 						embedding.NewV1(),
 						moderation.NewV1(),
 						file.NewV1(),
+						anthropic.NewV1(),
 					)
 				})
 
@@ -114,6 +117,14 @@ var (
 				)
 			})
 
+			s.Group("/v1beta", func(v1 *ghttp.RouterGroup) {
+				v1.Middleware(middlewareHandlerResponse)
+				v1.Middleware(middleware)
+				v1.Bind(
+					google.NewV1(),
+				)
+			})
+
 			if config.Cfg.ApiServerAddress != "" {
 				s.SetAddr(config.Cfg.ApiServerAddress)
 			}
@@ -136,11 +147,19 @@ func middleware(r *ghttp.Request) {
 
 	secretKey := strings.TrimPrefix(r.GetHeader("Authorization"), "Bearer ")
 	if secretKey == "" {
-		secretKey = r.GetHeader(config.Cfg.Midjourney.MidjourneyProxy.ApiSecretHeader)
+		secretKey = r.GetHeader(config.Cfg.Midjourney.ApiSecretHeader)
 	}
 
 	if secretKey == "" {
 		secretKey = r.Get("token").String()
+	}
+
+	if secretKey == "" {
+		secretKey = r.Get("key").String()
+	}
+
+	if secretKey == "" {
+		secretKey = r.Header.Get("x-api-key")
 	}
 
 	if secretKey == "" {
@@ -178,7 +197,7 @@ func middleware(r *ghttp.Request) {
 		return
 	}
 
-	if config.Cfg.Debug {
+	if config.Cfg.Debug.Open {
 		if gstr.HasPrefix(r.GetHeader("Content-Type"), "application/json") {
 			logger.Debugf(r.GetCtx(), "url: %s, request body: %s", r.GetUrl(), r.GetBodyString())
 		} else {
@@ -212,10 +231,17 @@ func middlewareHandlerResponse(r *ghttp.Request) {
 	)
 
 	if err != nil {
+
 		if code == errors.Error(r.GetCtx(), errors.ERR_NIL) {
 			code = errors.Error(r.GetCtx(), errors.ERR_INTERNAL_ERROR)
 		}
+
 		msg = err.Error()
+
+		if gstr.Contains(msg, "timeout") || gstr.Contains(msg, "tcp") || gstr.Contains(msg, "http") || gstr.Contains(msg, "connection") {
+			msg = "Internal Error."
+		}
+
 	} else {
 
 		if r.Response.Status > 0 && r.Response.Status != http.StatusOK {

@@ -1,71 +1,60 @@
-package chat
+package google
 
 import (
 	"context"
 	"fmt"
 	"github.com/gogf/gf/v2/encoding/gjson"
 	"github.com/gogf/gf/v2/frame/g"
+	"github.com/gogf/gf/v2/net/ghttp"
 	"github.com/gogf/gf/v2/os/gctx"
 	"github.com/gogf/gf/v2/os/grpool"
 	"github.com/gogf/gf/v2/os/gtime"
 	"github.com/gogf/gf/v2/text/gstr"
 	"github.com/gogf/gf/v2/util/gconv"
-	"github.com/iimeta/fastapi-sdk"
+	"github.com/gogf/gf/v2/util/grand"
+	"github.com/iimeta/fastapi-sdk/google"
 	sdkm "github.com/iimeta/fastapi-sdk/model"
-	"github.com/iimeta/fastapi/internal/config"
 	"github.com/iimeta/fastapi/internal/consts"
-	"github.com/iimeta/fastapi/internal/dao"
 	"github.com/iimeta/fastapi/internal/errors"
 	"github.com/iimeta/fastapi/internal/logic/common"
 	"github.com/iimeta/fastapi/internal/model"
 	mcommon "github.com/iimeta/fastapi/internal/model/common"
-	"github.com/iimeta/fastapi/internal/model/do"
 	"github.com/iimeta/fastapi/internal/service"
 	"github.com/iimeta/fastapi/utility/logger"
 	"github.com/iimeta/fastapi/utility/util"
 	"github.com/iimeta/tiktoken-go"
 	"io"
 	"math"
-	"slices"
-	"sync"
-	"time"
 )
 
-type sChat struct {
-	mutex sync.Mutex
-}
+type sGoogle struct{}
 
 func init() {
-	service.RegisterChat(New())
+	service.RegisterGoogle(New())
 }
 
-func New() service.IChat {
-	return &sChat{}
+func New() service.IGoogle {
+	return &sGoogle{}
 }
 
 // Completions
-func (s *sChat) Completions(ctx context.Context, params sdkm.ChatCompletionRequest, fallbackModelAgent *model.ModelAgent, fallbackModel *model.Model, retry ...int) (response sdkm.ChatCompletionResponse, err error) {
+func (s *sGoogle) Completions(ctx context.Context, request *ghttp.Request, fallbackModelAgent *model.ModelAgent, fallbackModel *model.Model, retry ...int) (response sdkm.ChatCompletionResponse, err error) {
 
 	now := gtime.TimestampMilli()
 	defer func() {
-		logger.Debugf(ctx, "sChat Completions time: %d", gtime.TimestampMilli()-now)
+		logger.Debugf(ctx, "sGoogle Completions time: %d", gtime.TimestampMilli()-now)
 	}()
 
-	if len(params.Functions) == 0 {
-		params.Messages = common.HandleMessages(params.Messages)
-		if len(params.Messages) == 0 {
-			return response, errors.ERR_INVALID_PARAMETER
-		}
-	}
-
 	var (
-		mak = &common.MAK{
+		params = convToChatCompletionRequest(request)
+		mak    = &common.MAK{
 			Model:              params.Model,
 			Messages:           params.Messages,
 			FallbackModelAgent: fallbackModelAgent,
 			FallbackModel:      fallbackModel,
 		}
-		client      sdk.Client
+		client      *google.Client
+		res         sdkm.GoogleChatCompletionRes
 		retryInfo   *mcommon.Retry
 		textTokens  int
 		imageTokens int
@@ -116,19 +105,15 @@ func (s *sChat) Completions(ctx context.Context, params sdkm.ChatCompletionReque
 					totalTokens = int(math.Ceil(float64(response.Usage.PromptTokens)*mak.ReqModel.MultimodalQuota.TextQuota.PromptRatio)) + int(math.Ceil(float64(response.Usage.CompletionTokens)*mak.ReqModel.MultimodalQuota.TextQuota.CompletionRatio))
 				}
 
-				if params.Tools != nil {
-					if tools := gconv.String(params.Tools); gstr.Contains(tools, "google_search") || gstr.Contains(tools, "googleSearch") {
-						totalTokens += mak.ReqModel.MultimodalQuota.SearchQuota
-						response.Usage.SearchTokens = mak.ReqModel.MultimodalQuota.SearchQuota
+				body := make(map[string]interface{})
+				if err := gjson.Unmarshal(request.GetBody(), &body); err == nil {
+					if t, ok := body["tools"]; ok {
+						if tools := gconv.String(t); gstr.Contains(tools, "google_search") || gstr.Contains(tools, "googleSearch") {
+							totalTokens += mak.ReqModel.MultimodalQuota.SearchQuota
+						}
 					}
-				}
-
-				if response.Usage.CacheCreationInputTokens != 0 {
-					totalTokens += int(math.Ceil(float64(response.Usage.CacheCreationInputTokens) * mak.ReqModel.MultimodalQuota.TextQuota.PromptRatio * 1.25))
-				}
-
-				if response.Usage.CacheReadInputTokens != 0 {
-					totalTokens += int(math.Ceil(float64(response.Usage.CacheReadInputTokens) * mak.ReqModel.MultimodalQuota.TextQuota.CompletionRatio * 0.1))
+				} else {
+					logger.Error(ctx, err)
 				}
 
 			} else if mak.ReqModel.Type == 102 { // 多模态语音
@@ -238,7 +223,7 @@ func (s *sChat) Completions(ctx context.Context, params sdkm.ChatCompletionReque
 					}
 				}
 
-				s.SaveLog(ctx, mak.ReqModel, mak.RealModel, fallbackModelAgent, fallbackModel, mak.Key, &params, completionsRes, retryInfo, false)
+				service.Chat().SaveLog(ctx, mak.ReqModel, mak.RealModel, fallbackModelAgent, fallbackModel, mak.Key, &params, completionsRes, retryInfo, false)
 
 			}); err != nil {
 				logger.Error(ctx, err)
@@ -251,46 +236,46 @@ func (s *sChat) Completions(ctx context.Context, params sdkm.ChatCompletionReque
 		return response, err
 	}
 
-	request := params
+	//request := params
+	//
+	//if !gstr.Contains(mak.RealModel.Model, "*") {
+	//	request.Model = mak.RealModel.Model
+	//}
+	//
+	//// 预设配置
+	//if mak.RealModel.IsEnablePresetConfig {
+	//
+	//	// 替换预设提示词
+	//	if mak.RealModel.PresetConfig.IsSupportSystemRole && mak.RealModel.PresetConfig.SystemRolePrompt != "" {
+	//		if request.Messages[0].Role == consts.ROLE_SYSTEM {
+	//			request.Messages = append([]sdkm.ChatCompletionMessage{{
+	//				Role:    consts.ROLE_SYSTEM,
+	//				Content: mak.RealModel.PresetConfig.SystemRolePrompt,
+	//			}}, request.Messages[1:]...)
+	//		} else {
+	//			request.Messages = append([]sdkm.ChatCompletionMessage{{
+	//				Role:    consts.ROLE_SYSTEM,
+	//				Content: mak.RealModel.PresetConfig.SystemRolePrompt,
+	//			}}, request.Messages...)
+	//		}
+	//	}
+	//
+	//	// 检查MaxTokens取值范围
+	//	if request.MaxTokens != 0 {
+	//		if mak.RealModel.PresetConfig.MinTokens != 0 && request.MaxTokens < mak.RealModel.PresetConfig.MinTokens {
+	//			request.MaxTokens = mak.RealModel.PresetConfig.MinTokens
+	//		} else if mak.RealModel.PresetConfig.MaxTokens != 0 && request.MaxTokens > mak.RealModel.PresetConfig.MaxTokens {
+	//			request.MaxTokens = mak.RealModel.PresetConfig.MaxTokens
+	//		}
+	//	}
+	//}
 
-	if !gstr.Contains(mak.RealModel.Model, "*") {
-		request.Model = mak.RealModel.Model
-	}
-
-	// 预设配置
-	if mak.RealModel.IsEnablePresetConfig {
-
-		// 替换预设提示词
-		if mak.RealModel.PresetConfig.IsSupportSystemRole && mak.RealModel.PresetConfig.SystemRolePrompt != "" {
-			if request.Messages[0].Role == consts.ROLE_SYSTEM {
-				request.Messages = append([]sdkm.ChatCompletionMessage{{
-					Role:    consts.ROLE_SYSTEM,
-					Content: mak.RealModel.PresetConfig.SystemRolePrompt,
-				}}, request.Messages[1:]...)
-			} else {
-				request.Messages = append([]sdkm.ChatCompletionMessage{{
-					Role:    consts.ROLE_SYSTEM,
-					Content: mak.RealModel.PresetConfig.SystemRolePrompt,
-				}}, request.Messages...)
-			}
-		}
-
-		// 检查MaxTokens取值范围
-		if request.MaxTokens != 0 {
-			if mak.RealModel.PresetConfig.MinTokens != 0 && request.MaxTokens < mak.RealModel.PresetConfig.MinTokens {
-				request.MaxTokens = mak.RealModel.PresetConfig.MinTokens
-			} else if mak.RealModel.PresetConfig.MaxTokens != 0 && request.MaxTokens > mak.RealModel.PresetConfig.MaxTokens {
-				request.MaxTokens = mak.RealModel.PresetConfig.MaxTokens
-			}
-		}
-	}
-
-	if client, err = common.NewClient(ctx, mak.Corp, mak.RealModel, mak.RealKey, mak.BaseUrl, mak.Path); err != nil {
+	if client, err = common.NewGoogleClient(ctx, mak.RealModel, mak.RealKey, mak.BaseUrl, mak.Path); err != nil {
 		logger.Error(ctx, err)
 		return response, err
 	}
 
-	response, err = client.ChatCompletion(ctx, request)
+	res, err = client.ChatCompletionOfficial(ctx, request.GetBody())
 	if err != nil {
 		logger.Error(ctx, err)
 
@@ -324,7 +309,7 @@ func (s *sChat) Completions(ctx context.Context, params sdkm.ChatCompletionReque
 								RetryCount: len(retry),
 								ErrMsg:     err.Error(),
 							}
-							return s.Completions(g.RequestFromCtx(ctx).GetCtx(), params, fallbackModelAgent, fallbackModel)
+							return s.Completions(g.RequestFromCtx(ctx).GetCtx(), request, fallbackModelAgent, fallbackModel)
 						}
 					}
 
@@ -335,7 +320,7 @@ func (s *sChat) Completions(ctx context.Context, params sdkm.ChatCompletionReque
 								RetryCount: len(retry),
 								ErrMsg:     err.Error(),
 							}
-							return s.Completions(g.RequestFromCtx(ctx).GetCtx(), params, nil, fallbackModel)
+							return s.Completions(g.RequestFromCtx(ctx).GetCtx(), request, nil, fallbackModel)
 						}
 					}
 				}
@@ -349,38 +334,34 @@ func (s *sChat) Completions(ctx context.Context, params sdkm.ChatCompletionReque
 				ErrMsg:     err.Error(),
 			}
 
-			return s.Completions(g.RequestFromCtx(ctx).GetCtx(), params, fallbackModelAgent, fallbackModel, append(retry, 1)...)
+			return s.Completions(g.RequestFromCtx(ctx).GetCtx(), request, fallbackModelAgent, fallbackModel, append(retry, 1)...)
 		}
 
 		return response, err
 	}
 
+	response = convToChatCompletionResponse(g.RequestFromCtx(ctx).GetCtx(), res, false)
+
 	return response, nil
 }
 
 // CompletionsStream
-func (s *sChat) CompletionsStream(ctx context.Context, params sdkm.ChatCompletionRequest, fallbackModelAgent *model.ModelAgent, fallbackModel *model.Model, retry ...int) (err error) {
+func (s *sGoogle) CompletionsStream(ctx context.Context, request *ghttp.Request, fallbackModelAgent *model.ModelAgent, fallbackModel *model.Model, retry ...int) (err error) {
 
 	now := gtime.TimestampMilli()
 	defer func() {
-		logger.Debugf(ctx, "sChat CompletionsStream time: %d", gtime.TimestampMilli()-now)
+		logger.Debugf(ctx, "sGoogle CompletionsStream time: %d", gtime.TimestampMilli()-now)
 	}()
 
-	if len(params.Functions) == 0 {
-		params.Messages = common.HandleMessages(params.Messages)
-		if len(params.Messages) == 0 {
-			return errors.ERR_INVALID_PARAMETER
-		}
-	}
-
 	var (
-		mak = &common.MAK{
+		params = convToChatCompletionRequest(request)
+		mak    = &common.MAK{
 			Model:              params.Model,
 			Messages:           params.Messages,
 			FallbackModelAgent: fallbackModelAgent,
 			FallbackModel:      fallbackModel,
 		}
-		client      sdk.Client
+		client      *google.Client
 		completion  string
 		connTime    int64
 		duration    int64
@@ -436,19 +417,15 @@ func (s *sChat) CompletionsStream(ctx context.Context, params sdkm.ChatCompletio
 					usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
 					totalTokens = imageTokens + int(math.Ceil(float64(textTokens)*mak.ReqModel.MultimodalQuota.TextQuota.PromptRatio)) + int(math.Ceil(float64(usage.CompletionTokens)*mak.ReqModel.MultimodalQuota.TextQuota.CompletionRatio))
 
-					if params.Tools != nil {
-						if tools := gconv.String(params.Tools); gstr.Contains(tools, "google_search") || gstr.Contains(tools, "googleSearch") {
-							totalTokens += mak.ReqModel.MultimodalQuota.SearchQuota
-							usage.SearchTokens = mak.ReqModel.MultimodalQuota.SearchQuota
+					body := make(map[string]interface{})
+					if err := gjson.Unmarshal(request.GetBody(), &body); err == nil {
+						if t, ok := body["tools"]; ok {
+							if tools := gconv.String(t); gstr.Contains(tools, "google_search") || gstr.Contains(tools, "googleSearch") {
+								totalTokens += mak.ReqModel.MultimodalQuota.SearchQuota
+							}
 						}
-					}
-
-					if usage.CacheCreationInputTokens != 0 {
-						totalTokens += int(math.Ceil(float64(usage.CacheCreationInputTokens) * mak.ReqModel.MultimodalQuota.TextQuota.PromptRatio * 1.25))
-					}
-
-					if usage.CacheReadInputTokens != 0 {
-						totalTokens += int(math.Ceil(float64(usage.CacheReadInputTokens) * mak.ReqModel.MultimodalQuota.TextQuota.CompletionRatio * 0.1))
+					} else {
+						logger.Error(ctx, err)
 					}
 
 				} else if mak.ReqModel.Type == 102 { // 多模态语音
@@ -470,19 +447,15 @@ func (s *sChat) CompletionsStream(ctx context.Context, params sdkm.ChatCompletio
 					usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
 					totalTokens = int(math.Ceil(float64(usage.PromptTokens)*mak.ReqModel.MultimodalQuota.TextQuota.PromptRatio)) + int(math.Ceil(float64(usage.CompletionTokens)*mak.ReqModel.MultimodalQuota.TextQuota.CompletionRatio))
 
-					if params.Tools != nil {
-						if tools := gconv.String(params.Tools); gstr.Contains(tools, "google_search") || gstr.Contains(tools, "googleSearch") {
-							totalTokens += mak.ReqModel.MultimodalQuota.SearchQuota
-							usage.SearchTokens = mak.ReqModel.MultimodalQuota.SearchQuota
+					body := make(map[string]interface{})
+					if err := gjson.Unmarshal(request.GetBody(), &body); err == nil {
+						if t, ok := body["tools"]; ok {
+							if tools := gconv.String(t); gstr.Contains(tools, "google_search") || gstr.Contains(tools, "googleSearch") {
+								totalTokens += mak.ReqModel.MultimodalQuota.SearchQuota
+							}
 						}
-					}
-
-					if usage.CacheCreationInputTokens != 0 {
-						totalTokens += int(math.Ceil(float64(usage.CacheCreationInputTokens) * mak.ReqModel.MultimodalQuota.TextQuota.PromptRatio * 1.25))
-					}
-
-					if usage.CacheReadInputTokens != 0 {
-						totalTokens += int(math.Ceil(float64(usage.CacheReadInputTokens) * mak.ReqModel.MultimodalQuota.TextQuota.CompletionRatio * 0.1))
+					} else {
+						logger.Error(ctx, err)
 					}
 
 				} else if mak.ReqModel.Type == 102 { // 多模态语音
@@ -530,7 +503,7 @@ func (s *sChat) CompletionsStream(ctx context.Context, params sdkm.ChatCompletio
 						completionsRes.Usage.TotalTokens = totalTokens
 					}
 
-					s.SaveLog(ctx, mak.ReqModel, mak.RealModel, fallbackModelAgent, fallbackModel, mak.Key, &params, completionsRes, retryInfo, false)
+					service.Chat().SaveLog(ctx, mak.ReqModel, mak.RealModel, fallbackModelAgent, fallbackModel, mak.Key, &params, completionsRes, retryInfo, false)
 
 				}); err != nil {
 					logger.Error(ctx, err)
@@ -548,46 +521,46 @@ func (s *sChat) CompletionsStream(ctx context.Context, params sdkm.ChatCompletio
 		return err
 	}
 
-	request := params
+	//request := params
+	//
+	//if !gstr.Contains(mak.RealModel.Model, "*") {
+	//	request.Model = mak.RealModel.Model
+	//}
+	//
+	//// 预设配置
+	//if mak.RealModel.IsEnablePresetConfig {
+	//
+	//	// 替换预设提示词
+	//	if mak.RealModel.PresetConfig.IsSupportSystemRole && mak.RealModel.PresetConfig.SystemRolePrompt != "" {
+	//		if request.Messages[0].Role == consts.ROLE_SYSTEM {
+	//			request.Messages = append([]sdkm.ChatCompletionMessage{{
+	//				Role:    consts.ROLE_SYSTEM,
+	//				Content: mak.RealModel.PresetConfig.SystemRolePrompt,
+	//			}}, request.Messages[1:]...)
+	//		} else {
+	//			request.Messages = append([]sdkm.ChatCompletionMessage{{
+	//				Role:    consts.ROLE_SYSTEM,
+	//				Content: mak.RealModel.PresetConfig.SystemRolePrompt,
+	//			}}, request.Messages...)
+	//		}
+	//	}
+	//
+	//	// 检查MaxTokens取值范围
+	//	if request.MaxTokens != 0 {
+	//		if mak.RealModel.PresetConfig.MinTokens != 0 && request.MaxTokens < mak.RealModel.PresetConfig.MinTokens {
+	//			request.MaxTokens = mak.RealModel.PresetConfig.MinTokens
+	//		} else if mak.RealModel.PresetConfig.MaxTokens != 0 && request.MaxTokens > mak.RealModel.PresetConfig.MaxTokens {
+	//			request.MaxTokens = mak.RealModel.PresetConfig.MaxTokens
+	//		}
+	//	}
+	//}
 
-	if !gstr.Contains(mak.RealModel.Model, "*") {
-		request.Model = mak.RealModel.Model
-	}
-
-	// 预设配置
-	if mak.RealModel.IsEnablePresetConfig {
-
-		// 替换预设提示词
-		if mak.RealModel.PresetConfig.IsSupportSystemRole && mak.RealModel.PresetConfig.SystemRolePrompt != "" {
-			if request.Messages[0].Role == consts.ROLE_SYSTEM {
-				request.Messages = append([]sdkm.ChatCompletionMessage{{
-					Role:    consts.ROLE_SYSTEM,
-					Content: mak.RealModel.PresetConfig.SystemRolePrompt,
-				}}, request.Messages[1:]...)
-			} else {
-				request.Messages = append([]sdkm.ChatCompletionMessage{{
-					Role:    consts.ROLE_SYSTEM,
-					Content: mak.RealModel.PresetConfig.SystemRolePrompt,
-				}}, request.Messages...)
-			}
-		}
-
-		// 检查MaxTokens取值范围
-		if request.MaxTokens != 0 {
-			if mak.RealModel.PresetConfig.MinTokens != 0 && request.MaxTokens < mak.RealModel.PresetConfig.MinTokens {
-				request.MaxTokens = mak.RealModel.PresetConfig.MinTokens
-			} else if mak.RealModel.PresetConfig.MaxTokens != 0 && request.MaxTokens > mak.RealModel.PresetConfig.MaxTokens {
-				request.MaxTokens = mak.RealModel.PresetConfig.MaxTokens
-			}
-		}
-	}
-
-	if client, err = common.NewClient(ctx, mak.Corp, mak.RealModel, mak.RealKey, mak.BaseUrl, mak.Path); err != nil {
+	if client, err = common.NewGoogleClient(ctx, mak.RealModel, mak.RealKey, mak.BaseUrl, mak.Path); err != nil {
 		logger.Error(ctx, err)
 		return err
 	}
 
-	response, err := client.ChatCompletionStream(ctx, request)
+	response, err := client.ChatCompletionStreamOfficial(ctx, request.GetBody())
 	if err != nil {
 		logger.Error(ctx, err)
 
@@ -621,7 +594,7 @@ func (s *sChat) CompletionsStream(ctx context.Context, params sdkm.ChatCompletio
 								RetryCount: len(retry),
 								ErrMsg:     err.Error(),
 							}
-							return s.CompletionsStream(g.RequestFromCtx(ctx).GetCtx(), params, fallbackModelAgent, fallbackModel)
+							return s.CompletionsStream(g.RequestFromCtx(ctx).GetCtx(), request, fallbackModelAgent, fallbackModel)
 						}
 					}
 
@@ -632,7 +605,7 @@ func (s *sChat) CompletionsStream(ctx context.Context, params sdkm.ChatCompletio
 								RetryCount: len(retry),
 								ErrMsg:     err.Error(),
 							}
-							return s.CompletionsStream(g.RequestFromCtx(ctx).GetCtx(), params, nil, fallbackModel)
+							return s.CompletionsStream(g.RequestFromCtx(ctx).GetCtx(), request, nil, fallbackModel)
 						}
 					}
 				}
@@ -646,7 +619,7 @@ func (s *sChat) CompletionsStream(ctx context.Context, params sdkm.ChatCompletio
 				ErrMsg:     err.Error(),
 			}
 
-			return s.CompletionsStream(g.RequestFromCtx(ctx).GetCtx(), params, fallbackModelAgent, fallbackModel, append(retry, 1)...)
+			return s.CompletionsStream(g.RequestFromCtx(ctx).GetCtx(), request, fallbackModelAgent, fallbackModel, append(retry, 1)...)
 		}
 
 		return err
@@ -656,7 +629,9 @@ func (s *sChat) CompletionsStream(ctx context.Context, params sdkm.ChatCompletio
 
 	for {
 
-		response := <-response
+		res := <-response
+
+		response := convToChatCompletionResponse(g.RequestFromCtx(ctx).GetCtx(), *res, true)
 
 		connTime = response.ConnTime
 		duration = response.Duration
@@ -680,12 +655,6 @@ func (s *sChat) CompletionsStream(ctx context.Context, params sdkm.ChatCompletio
 							usage.TotalTokens = response.Usage.TotalTokens
 						} else {
 							usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
-						}
-						if response.Usage.CacheCreationInputTokens != 0 {
-							usage.CacheCreationInputTokens = response.Usage.CacheCreationInputTokens
-						}
-						if response.Usage.CacheReadInputTokens != 0 {
-							usage.CacheReadInputTokens = response.Usage.CacheReadInputTokens
 						}
 					}
 				}
@@ -730,7 +699,7 @@ func (s *sChat) CompletionsStream(ctx context.Context, params sdkm.ChatCompletio
 									RetryCount: len(retry),
 									ErrMsg:     err.Error(),
 								}
-								return s.CompletionsStream(g.RequestFromCtx(ctx).GetCtx(), params, fallbackModelAgent, fallbackModel)
+								return s.CompletionsStream(g.RequestFromCtx(ctx).GetCtx(), request, fallbackModelAgent, fallbackModel)
 							}
 						}
 
@@ -741,7 +710,7 @@ func (s *sChat) CompletionsStream(ctx context.Context, params sdkm.ChatCompletio
 									RetryCount: len(retry),
 									ErrMsg:     err.Error(),
 								}
-								return s.CompletionsStream(g.RequestFromCtx(ctx).GetCtx(), params, nil, fallbackModel)
+								return s.CompletionsStream(g.RequestFromCtx(ctx).GetCtx(), request, nil, fallbackModel)
 							}
 						}
 					}
@@ -755,7 +724,7 @@ func (s *sChat) CompletionsStream(ctx context.Context, params sdkm.ChatCompletio
 					ErrMsg:     err.Error(),
 				}
 
-				return s.CompletionsStream(g.RequestFromCtx(ctx).GetCtx(), params, fallbackModelAgent, fallbackModel, append(retry, 1)...)
+				return s.CompletionsStream(g.RequestFromCtx(ctx).GetCtx(), request, fallbackModelAgent, fallbackModel, append(retry, 1)...)
 			}
 
 			return err
@@ -794,290 +763,132 @@ func (s *sChat) CompletionsStream(ctx context.Context, params sdkm.ChatCompletio
 				} else {
 					usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
 				}
-				if response.Usage.CacheCreationInputTokens != 0 {
-					usage.CacheCreationInputTokens = response.Usage.CacheCreationInputTokens
-				}
-				if response.Usage.CacheReadInputTokens != 0 {
-					usage.CacheReadInputTokens = response.Usage.CacheReadInputTokens
-				}
 			}
 		}
 
-		// 替换成调用的模型
-		response.Model = mak.ReqModel.Model
+		data := make(map[string]interface{})
+		if err = gjson.Unmarshal(response.ResponseBytes, &data); err != nil {
+			logger.Error(ctx, err)
+			return err
+		}
 
-		// OpenAI官方格式
-		if len(response.ResponseBytes) > 0 {
-
-			data := make(map[string]interface{})
-			if err = gjson.Unmarshal(response.ResponseBytes, &data); err != nil {
-				logger.Error(ctx, err)
-				return err
-			}
-
-			// 替换成调用的模型
-			if _, ok := data["model"]; ok {
-				data["model"] = mak.ReqModel.Model
-			}
-
-			if err = util.SSEServer(ctx, gjson.MustEncodeString(data)); err != nil {
-				logger.Error(ctx, err)
-				return err
-			}
-
-		} else {
-			if err = util.SSEServer(ctx, gjson.MustEncodeString(response)); err != nil {
-				logger.Error(ctx, err)
-				return err
-			}
+		if err = util.SSEServer(ctx, gjson.MustEncodeString(data)); err != nil {
+			logger.Error(ctx, err)
+			return err
 		}
 	}
 }
 
-// 保存日志
-func (s *sChat) SaveLog(ctx context.Context, reqModel, realModel *model.Model, fallbackModelAgent *model.ModelAgent, fallbackModel *model.Model, key *model.Key, completionsReq *sdkm.ChatCompletionRequest, completionsRes *model.CompletionsRes, retryInfo *mcommon.Retry, isSmartMatch bool, retry ...int) {
+func convToChatCompletionRequest(request *ghttp.Request) sdkm.ChatCompletionRequest {
 
-	if len(retry) == 0 {
-		s.mutex.Lock()
-		defer s.mutex.Unlock()
+	googleChatCompletionReq := sdkm.GoogleChatCompletionReq{}
+	if err := gjson.Unmarshal(request.GetBody(), &googleChatCompletionReq); err != nil {
+		logger.Error(request.GetCtx(), err)
+		return sdkm.ChatCompletionRequest{}
 	}
 
-	now := gtime.TimestampMilli()
-	defer func() {
-		logger.Debugf(ctx, "sChat SaveLog time: %d", gtime.TimestampMilli()-now)
-	}()
+	messages := make([]sdkm.ChatCompletionMessage, 0)
+	for _, content := range googleChatCompletionReq.Contents {
 
-	// 不记录此错误日志
-	if completionsRes.Error != nil && (errors.Is(completionsRes.Error, errors.ERR_MODEL_NOT_FOUND) || errors.Is(completionsRes.Error, errors.ERR_MODEL_DISABLED)) {
-		return
-	}
+		contents := make([]interface{}, 0)
+		for _, part := range content.Parts {
 
-	chat := do.Chat{
-		TraceId:      gctx.CtxId(ctx),
-		UserId:       service.Session().GetUserId(ctx),
-		AppId:        service.Session().GetAppId(ctx),
-		IsSmartMatch: isSmartMatch,
-		Stream:       completionsReq.Stream,
-		ConnTime:     completionsRes.ConnTime,
-		Duration:     completionsRes.Duration,
-		TotalTime:    completionsRes.TotalTime,
-		InternalTime: completionsRes.InternalTime,
-		ReqTime:      completionsRes.EnterTime,
-		ReqDate:      gtime.NewFromTimeStamp(completionsRes.EnterTime).Format("Y-m-d"),
-		ClientIp:     g.RequestFromCtx(ctx).GetClientIp(),
-		RemoteIp:     g.RequestFromCtx(ctx).GetRemoteIp(),
-		LocalIp:      util.GetLocalIp(),
-		Status:       1,
-		Host:         g.RequestFromCtx(ctx).GetHost(),
-	}
-
-	if len(completionsReq.Messages) > 0 && slices.Contains(config.Cfg.Log.Records, "prompt") {
-
-		prompt := completionsReq.Messages[len(completionsReq.Messages)-1].Content
-
-		if reqModel.Type == 102 {
-
-			if multiContent, ok := prompt.([]interface{}); ok {
-				for _, value := range multiContent {
-					if content, ok := value.(map[string]interface{}); ok {
-						if content["type"] == "text" {
-							chat.Prompt = gconv.String(content["text"])
-						}
-					}
-				}
-			} else {
-				chat.Prompt = gconv.String(prompt)
+			if part.Text != "" {
+				contents = append(contents, g.MapStrAny{
+					"type": "text",
+					"text": part.Text,
+				})
 			}
 
+			if part.InlineData != nil {
+				contents = append(contents, g.MapStrAny{
+					"type": "image_url",
+					"image_url": g.MapStrAny{
+						"url": part.InlineData.Data,
+					},
+				})
+			}
+		}
+
+		role := content.Role
+
+		if role == consts.ROLE_MODEL {
+			role = consts.ROLE_ASSISTANT
+		}
+
+		messages = append(messages, sdkm.ChatCompletionMessage{
+			Role:    role,
+			Content: contents,
+		})
+	}
+
+	return sdkm.ChatCompletionRequest{
+		Model:       request.GetRouterMap()["model"],
+		Messages:    messages,
+		MaxTokens:   googleChatCompletionReq.GenerationConfig.MaxOutputTokens,
+		Temperature: googleChatCompletionReq.GenerationConfig.Temperature,
+		TopP:        googleChatCompletionReq.GenerationConfig.TopP,
+	}
+}
+
+func convToChatCompletionResponse(ctx context.Context, res sdkm.GoogleChatCompletionRes, stream bool) sdkm.ChatCompletionResponse {
+
+	googleChatCompletionRes := sdkm.GoogleChatCompletionRes{
+		ResponseBytes: res.ResponseBytes,
+		UsageMetadata: res.UsageMetadata,
+		Err:           res.Err,
+	}
+
+	if res.ResponseBytes != nil {
+		if err := gjson.Unmarshal(res.ResponseBytes, &googleChatCompletionRes); err != nil {
+			logger.Error(ctx, err)
+		}
+	}
+
+	chatCompletionResponse := sdkm.ChatCompletionResponse{
+		ID:            consts.COMPLETION_ID_PREFIX + grand.S(29),
+		Object:        consts.COMPLETION_OBJECT,
+		Created:       gtime.Timestamp(),
+		Model:         googleChatCompletionRes.ModelVersion,
+		ResponseBytes: res.ResponseBytes,
+		ConnTime:      res.ConnTime,
+		Duration:      res.Duration,
+		TotalTime:     res.TotalTime,
+		Error:         googleChatCompletionRes.Err,
+	}
+
+	if len(googleChatCompletionRes.Candidates) > 0 {
+		if stream {
+			for _, candidate := range googleChatCompletionRes.Candidates {
+				chatCompletionResponse.Choices = append(chatCompletionResponse.Choices, sdkm.ChatCompletionChoice{
+					Index: candidate.Index,
+					Delta: &sdkm.ChatCompletionStreamChoiceDelta{
+						Role:    consts.ROLE_ASSISTANT,
+						Content: candidate.Content.Parts[0].Text,
+					},
+				})
+			}
 		} else {
-
-			if slices.Contains(config.Cfg.Log.Records, "image") {
-				chat.Prompt = gconv.String(prompt)
-			} else {
-				if multiContent, ok := prompt.([]interface{}); ok {
-
-					for _, value := range multiContent {
-
-						if content, ok := value.(map[string]interface{}); ok {
-
-							if content["type"] == "image_url" {
-								if imageUrl, ok := content["image_url"].(map[string]interface{}); ok {
-									if !gstr.HasPrefix(gconv.String(imageUrl["url"]), "http") {
-										imageUrl["url"] = "[BASE64图像数据]"
-									}
-								}
-							}
-
-							if content["type"] == "image" {
-								if source, ok := content["source"].(sdkm.Source); ok {
-									source.Data = "[BASE64图像数据]"
-									content["source"] = source
-								}
-							}
-						}
-					}
-
-					chat.Prompt = gconv.String(multiContent)
-
-				} else {
-					chat.Prompt = gconv.String(prompt)
-				}
+			for i, part := range googleChatCompletionRes.Candidates[0].Content.Parts {
+				chatCompletionResponse.Choices = append(chatCompletionResponse.Choices, sdkm.ChatCompletionChoice{
+					Index: i,
+					Message: &sdkm.ChatCompletionMessage{
+						Role:    consts.ROLE_ASSISTANT,
+						Content: part.Text,
+					},
+					FinishReason: "stop",
+				})
 			}
 		}
 	}
 
-	if slices.Contains(config.Cfg.Log.Records, "completion") {
-		chat.Completion = completionsRes.Completion
-	}
-
-	if reqModel != nil {
-		chat.Corp = reqModel.Corp
-		chat.ModelId = reqModel.Id
-		chat.Name = reqModel.Name
-		chat.Model = reqModel.Model
-		chat.Type = reqModel.Type
-		chat.TextQuota = reqModel.TextQuota
-		chat.MultimodalQuota = reqModel.MultimodalQuota
-
-		if reqModel.Type == 102 {
-			chat.TextQuota.BillingMethod = reqModel.MultimodalAudioQuota.AudioQuota.BillingMethod
-			chat.TextQuota.PromptRatio = reqModel.MultimodalAudioQuota.AudioQuota.PromptRatio
-			chat.TextQuota.CompletionRatio = reqModel.MultimodalAudioQuota.AudioQuota.CompletionRatio
-			chat.TextQuota.FixedQuota = reqModel.MultimodalAudioQuota.AudioQuota.FixedQuota
+	if googleChatCompletionRes.UsageMetadata != nil {
+		chatCompletionResponse.Usage = &sdkm.Usage{
+			PromptTokens:     googleChatCompletionRes.UsageMetadata.PromptTokenCount,
+			CompletionTokens: googleChatCompletionRes.UsageMetadata.CandidatesTokenCount,
+			TotalTokens:      googleChatCompletionRes.UsageMetadata.TotalTokenCount,
 		}
 	}
 
-	if realModel != nil {
-
-		chat.IsEnablePresetConfig = realModel.IsEnablePresetConfig
-		chat.PresetConfig = realModel.PresetConfig
-		chat.IsEnableForward = realModel.IsEnableForward
-		chat.ForwardConfig = realModel.ForwardConfig
-		chat.IsEnableModelAgent = realModel.IsEnableModelAgent
-		chat.RealModelId = realModel.Id
-		chat.RealModelName = realModel.Name
-		chat.RealModel = realModel.Model
-
-		if chat.IsEnableModelAgent && realModel.ModelAgent != nil {
-			chat.ModelAgentId = realModel.ModelAgent.Id
-			chat.ModelAgent = &do.ModelAgent{
-				Corp:    realModel.ModelAgent.Corp,
-				Name:    realModel.ModelAgent.Name,
-				BaseUrl: realModel.ModelAgent.BaseUrl,
-				Path:    realModel.ModelAgent.Path,
-				Weight:  realModel.ModelAgent.Weight,
-				Remark:  realModel.ModelAgent.Remark,
-				Status:  realModel.ModelAgent.Status,
-			}
-		}
-	}
-
-	chat.PromptTokens = completionsRes.Usage.PromptTokens
-	chat.CompletionTokens = completionsRes.Usage.CompletionTokens
-	chat.TotalTokens = completionsRes.Usage.TotalTokens
-	chat.SearchTokens = completionsRes.Usage.SearchTokens
-	chat.CacheWriteTokens = completionsRes.Usage.CacheCreationInputTokens
-	chat.CacheHitTokens = completionsRes.Usage.CacheReadInputTokens
-
-	if fallbackModelAgent != nil {
-		chat.IsEnableFallback = true
-		chat.FallbackConfig = &mcommon.FallbackConfig{
-			ModelAgent:     fallbackModelAgent.Id,
-			ModelAgentName: fallbackModelAgent.Name,
-		}
-	}
-
-	if fallbackModel != nil {
-		chat.IsEnableFallback = true
-		if chat.FallbackConfig == nil {
-			chat.FallbackConfig = new(mcommon.FallbackConfig)
-		}
-		chat.FallbackConfig.Model = fallbackModel.Model
-		chat.FallbackConfig.ModelName = fallbackModel.Name
-	}
-
-	if key != nil {
-		chat.Key = key.Key
-	}
-
-	if completionsRes.Error != nil {
-		chat.ErrMsg = completionsRes.Error.Error()
-		if common.IsAborted(completionsRes.Error) {
-			chat.Status = 2
-		} else {
-			chat.Status = -1
-		}
-	}
-
-	if slices.Contains(config.Cfg.Log.Records, "messages") {
-		for _, message := range completionsReq.Messages {
-
-			content := message.Content
-
-			if !slices.Contains(config.Cfg.Log.Records, "image") {
-
-				if multiContent, ok := content.([]interface{}); ok {
-
-					for _, value := range multiContent {
-
-						if content, ok := value.(map[string]interface{}); ok {
-
-							if content["type"] == "image_url" {
-								if imageUrl, ok := content["image_url"].(map[string]interface{}); ok {
-									if !gstr.HasPrefix(gconv.String(imageUrl["url"]), "http") {
-										imageUrl["url"] = "[BASE64图像数据]"
-									}
-								}
-							}
-
-							if content["type"] == "image" {
-								if source, ok := content["source"].(sdkm.Source); ok {
-									source.Data = "[BASE64图像数据]"
-									content["source"] = source
-								}
-							}
-						}
-					}
-
-					content = gconv.String(multiContent)
-				}
-			}
-
-			chat.Messages = append(chat.Messages, mcommon.Message{
-				Role:    message.Role,
-				Content: gconv.String(content),
-			})
-		}
-	}
-
-	if retryInfo != nil {
-
-		chat.IsRetry = retryInfo.IsRetry
-		chat.Retry = &mcommon.Retry{
-			IsRetry:    retryInfo.IsRetry,
-			RetryCount: retryInfo.RetryCount,
-			ErrMsg:     retryInfo.ErrMsg,
-		}
-
-		if chat.IsRetry {
-			chat.Status = 3
-			chat.ErrMsg = retryInfo.ErrMsg
-		}
-	}
-
-	if _, err := dao.Chat.Insert(ctx, chat); err != nil {
-		logger.Error(ctx, err)
-
-		if len(retry) == 10 {
-			panic(err)
-		}
-
-		retry = append(retry, 1)
-
-		time.Sleep(time.Duration(len(retry)*5) * time.Second)
-
-		logger.Errorf(ctx, "sChat SaveLog retry: %d", len(retry))
-
-		s.SaveLog(ctx, reqModel, realModel, fallbackModelAgent, fallbackModel, key, completionsReq, completionsRes, retryInfo, isSmartMatch, retry...)
-	}
+	return chatCompletionResponse
 }
