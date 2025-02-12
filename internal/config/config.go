@@ -11,7 +11,6 @@ import (
 	"github.com/gogf/gf/v2/os/gfsnotify"
 	"github.com/iimeta/fastapi/internal/model/entity"
 	"github.com/iimeta/fastapi/utility/logger"
-	"time"
 )
 
 var Cfg *Config
@@ -44,11 +43,21 @@ func init() {
 type Config struct {
 	ApiServerAddress string `json:"api_server_address"`
 	Local            Local  `json:"local"`
+	Oss              Oss    `json:"oss"`
 	*entity.SysConfig
 }
 
 type Local struct {
 	PublicIp []string `json:"public_ip"`
+}
+
+type Oss struct {
+	Endpoint  string `json:"endpoint"`
+	Region    string `json:"region"`
+	AccessKey string `json:"access_key"`
+	SecretKey string `json:"secret_key"`
+	Bucket    string `json:"bucket"`
+	Domain    string `json:"domain"`
 }
 
 func Reload(ctx context.Context, sysConfig *entity.SysConfig) {
@@ -69,15 +78,6 @@ func Reload(ctx context.Context, sysConfig *entity.SysConfig) {
 	}
 
 	logger.Infof(ctx, "加载配置成功, 当前配置信息: %s", gjson.MustEncodeString(Cfg))
-}
-
-type Oss struct {
-	Endpoint  string `json:"endpoint"`
-	Region    string `json:"region"`
-	AccessKey string `json:"access_key"`
-	SecretKey string `json:"secret_key"`
-	Bucket    string `json:"bucket"`
-	Domain    string `json:"domain"`
 }
 
 func Get(ctx context.Context, pattern string, def ...interface{}) (*gvar.Var, error) {
