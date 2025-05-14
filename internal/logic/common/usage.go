@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"github.com/gogf/gf/v2/os/gtime"
+	"github.com/iimeta/fastapi/internal/config"
 	"github.com/iimeta/fastapi/internal/consts"
+	"github.com/iimeta/fastapi/internal/model"
 	"github.com/iimeta/fastapi/internal/service"
 	"github.com/iimeta/fastapi/utility/logger"
 	"github.com/iimeta/fastapi/utility/redis"
@@ -12,7 +14,7 @@ import (
 )
 
 // 记录使用额度
-func (s *sCommon) RecordUsage(ctx context.Context, totalTokens int, key string) error {
+func (s *sCommon) RecordUsage(ctx context.Context, totalTokens int, key string, group *model.Group) error {
 
 	now := gtime.TimestampMilli()
 	defer func() {
@@ -23,11 +25,12 @@ func (s *sCommon) RecordUsage(ctx context.Context, totalTokens int, key string) 
 		return nil
 	}
 
+	rid := service.Session().GetRid(ctx)
 	userId := service.Session().GetUserId(ctx)
 	appId := service.Session().GetAppId(ctx)
 	appKey := service.Session().GetSecretKey(ctx)
 
-	logger.Infof(ctx, "sCommon RecordUsage userId: %d, appId: %d, appKey: %s, spendQuota: %d, key: %s", userId, appId, appKey, totalTokens, key)
+	logger.Infof(ctx, "sCommon RecordUsage rid: %d, userId: %d, appId: %d, appKey: %s, spendQuota: %d, key: %s", rid, userId, appId, appKey, totalTokens, key)
 
 	usageKey := s.GetUserUsageKey(ctx)
 
@@ -37,11 +40,43 @@ func (s *sCommon) RecordUsage(ctx context.Context, totalTokens int, key string) 
 		panic(err)
 	}
 
+	if err = service.User().SaveCacheUserQuota(ctx, userId, currentQuota); err != nil {
+		logger.Error(ctx, err)
+	}
+
+	if currentQuota <= config.Cfg.QuotaWarning.Threshold {
+		if _, err = redis.Publish(ctx, consts.CHANGE_CHANNEL_USER, model.PubMessage{
+			Action: consts.ACTION_CACHE,
+			NewData: &model.UserQuota{
+				UserId:       userId,
+				CurrentQuota: currentQuota,
+			},
+		}); err != nil {
+			logger.Error(ctx, err)
+		}
+	}
+
 	if err = mongoSpendQuota(ctx, func() error {
 		return service.User().SpendQuota(ctx, userId, totalTokens, currentQuota)
 	}); err != nil {
 		logger.Error(ctx, err)
 		panic(err)
+	}
+
+	if rid != 0 {
+
+		currentQuota, err = redisSpendQuota(ctx, s.GetResellerUsageKey(ctx), consts.RESELLER_QUOTA_FIELD, totalTokens)
+		if err != nil {
+			logger.Error(ctx, err)
+			panic(err)
+		}
+
+		if err = mongoSpendQuota(ctx, func() error {
+			return service.Reseller().SpendQuota(ctx, rid, totalTokens, currentQuota)
+		}); err != nil {
+			logger.Error(ctx, err)
+			panic(err)
+		}
 	}
 
 	if service.Session().GetAppIsLimitQuota(ctx) {
@@ -97,6 +132,45 @@ func (s *sCommon) RecordUsage(ctx context.Context, totalTokens int, key string) 
 	}); err != nil {
 		logger.Error(ctx, err)
 		panic(err)
+	}
+
+	if group != nil {
+
+		if group.IsLimitQuota {
+
+			currentQuota, err = redisSpendQuota(ctx, consts.API_GROUP_USAGE_KEY, group.Id, totalTokens)
+			if err != nil {
+				logger.Error(ctx, err)
+				panic(err)
+			}
+
+			if err = mongoSpendQuota(ctx, func() error {
+				return service.Group().SpendQuota(ctx, group.Id, totalTokens, currentQuota)
+			}); err != nil {
+				logger.Error(ctx, err)
+				panic(err)
+			}
+
+		} else {
+			if err = mongoUsedQuota(ctx, func() error {
+				return service.Group().UsedQuota(ctx, group.Id, totalTokens)
+			}); err != nil {
+				logger.Error(ctx, err)
+				panic(err)
+			}
+		}
+
+		if group.IsEnableForward && group.ForwardConfig.ForwardRule == 4 && group.UsedQuota < group.ForwardConfig.UsedQuota {
+
+			if group, err = service.Group().GetGroup(ctx, group.Id); err != nil {
+				logger.Error(ctx, err)
+				panic(err)
+			}
+
+			if err = service.Group().SaveCache(ctx, group); err != nil {
+				logger.Error(ctx, err)
+			}
+		}
 	}
 
 	return nil
@@ -178,8 +252,12 @@ func (s *sCommon) GetKeyTotalTokens(ctx context.Context) (int, error) {
 	return redis.HGetInt(ctx, s.GetUserUsageKey(ctx), s.GetKeyTotalTokensField(ctx))
 }
 
+func (s *sCommon) GetResellerUsageKey(ctx context.Context) string {
+	return fmt.Sprintf(consts.API_RESELLER_USAGE_KEY, service.Session().GetRid(ctx))
+}
+
 func (s *sCommon) GetUserUsageKey(ctx context.Context) string {
-	return fmt.Sprintf(consts.API_USAGE_KEY, service.Session().GetUserId(ctx))
+	return fmt.Sprintf(consts.API_USER_USAGE_KEY, service.Session().GetUserId(ctx))
 }
 
 func (s *sCommon) GetAppTotalTokensField(ctx context.Context) string {

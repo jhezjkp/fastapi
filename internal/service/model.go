@@ -21,10 +21,14 @@ type (
 		GetModelById(ctx context.Context, id string) (*model.Model, error)
 		// 根据model和secretKey获取模型信息
 		GetModelBySecretKey(ctx context.Context, m string, secretKey string) (*model.Model, error)
+		// 根据model和group获取模型信息
+		GetModelByGroup(ctx context.Context, m string, group *model.Group) (*model.Model, error)
 		// 模型列表
 		List(ctx context.Context, ids []string) ([]*model.Model, error)
 		// 全部模型列表
 		ListAll(ctx context.Context) ([]*model.Model, error)
+		// 获取模型与密钥列表
+		GetModelsAndKeys(ctx context.Context) ([]*model.Model, map[string][]*model.Key, error)
 		// 根据模型ID获取模型信息并保存到缓存
 		GetModelAndSaveCache(ctx context.Context, id string) (*model.Model, error)
 		// 获取模型列表并保存到缓存
@@ -43,6 +47,8 @@ type (
 		RemoveCacheModel(ctx context.Context, id string)
 		// 获取目标模型
 		GetTargetModel(ctx context.Context, model *model.Model, messages []sdkm.ChatCompletionMessage) (targetModel *model.Model, err error)
+		// 获取分组目标模型
+		GetGroupTargetModel(ctx context.Context, group *model.Group, model *model.Model, messages []sdkm.ChatCompletionMessage) (targetModel *model.Model, err error)
 		// 获取后备模型
 		GetFallbackModel(ctx context.Context, model *model.Model) (fallbackModel *model.Model, err error)
 		// 变更订阅

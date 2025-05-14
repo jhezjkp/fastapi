@@ -16,6 +16,9 @@ type Image struct {
 	UserId               int                    `bson:"user_id,omitempty"`                 // 用户ID
 	AppId                int                    `bson:"app_id,omitempty"`                  // 应用ID
 	Corp                 string                 `bson:"corp,omitempty"`                    // 公司
+	GroupId              string                 `bson:"group_id,omitempty"`                // 分组ID
+	GroupName            string                 `bson:"group_name,omitempty"`              // 分组名称
+	Discount             float64                `bson:"discount,omitempty"`                // 分组折扣
 	ModelId              string                 `bson:"model_id,omitempty"`                // 模型ID
 	Name                 string                 `bson:"name,omitempty"`                    // 模型名称
 	Model                string                 `bson:"model,omitempty"`                   // 模型
@@ -37,11 +40,11 @@ type Image struct {
 	Prompt               string                 `bson:"prompt,omitempty"`                  // 提示(提问)
 	Size                 string                 `bson:"size,omitempty"`                    // 尺寸大小
 	N                    int                    `bson:"n,omitempty"`                       // 图像数
-	Quality              string                 `bson:"quality,omitempty"`                 // 图像质量[hd]
+	Quality              string                 `bson:"quality,omitempty"`                 // 图像质量[high, medium, low, hd, standard]
 	Style                string                 `bson:"style,omitempty"`                   // 图像样式[vivid, natural]
 	ResponseFormat       string                 `bson:"response_format,omitempty"`         // 图像格式[url, b64_json]
 	ImageData            []common.ImageData     `bson:"image_data,omitempty"`              // 生成图像数据
-	ImageQuotas          []common.ImageQuota    `bson:"image_quotas,omitempty"`            // 图像额度
+	ImageQuota           common.ImageQuota      `bson:"image_quota,omitempty"`             // 图像额度
 	TotalTokens          int                    `bson:"total_tokens,omitempty"`            // 总令牌数
 	TotalTime            int64                  `bson:"total_time,omitempty"`              // 总时间
 	InternalTime         int64                  `bson:"internal_time,omitempty"`           // 内耗时间
@@ -55,6 +58,7 @@ type Image struct {
 	Retry                *common.Retry          `bson:"retry,omitempty"`                   // 重试
 	Status               int                    `bson:"status,omitempty"`                  // 状态[1:成功, -1:失败, 2:中止, 3:重试]
 	Host                 string                 `bson:"host,omitempty"`                    // Host
+	Rid                  int                    `bson:"rid,omitempty"`                     // 代理商ID
 	Creator              string                 `bson:"creator,omitempty"`                 // 创建人
 	Updater              string                 `bson:"updater,omitempty"`                 // 更新人
 	CreatedAt            int64                  `bson:"created_at,omitempty"`              // 创建时间

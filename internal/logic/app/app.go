@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"fmt"
 	"github.com/gogf/gf/v2/encoding/gjson"
 	"github.com/gogf/gf/v2/os/gtime"
 	"github.com/iimeta/fastapi/internal/consts"
@@ -54,6 +53,7 @@ func (s *sApp) GetApp(ctx context.Context, appId int) (*model.App, error) {
 
 	return &model.App{
 		Id:             app.Id,
+		UserId:         app.UserId,
 		AppId:          app.AppId,
 		Name:           app.Name,
 		Models:         app.Models,
@@ -61,11 +61,13 @@ func (s *sApp) GetApp(ctx context.Context, appId int) (*model.App, error) {
 		Quota:          app.Quota,
 		UsedQuota:      app.UsedQuota,
 		QuotaExpiresAt: app.QuotaExpiresAt,
+		IsBindGroup:    app.IsBindGroup,
+		Group:          app.Group,
 		IpWhitelist:    app.IpWhitelist,
 		IpBlacklist:    app.IpBlacklist,
 		Remark:         app.Remark,
 		Status:         app.Status,
-		UserId:         app.UserId,
+		Rid:            app.Rid,
 	}, nil
 }
 
@@ -79,7 +81,7 @@ func (s *sApp) List(ctx context.Context) ([]*model.App, error) {
 
 	filter := bson.M{}
 
-	results, err := dao.App.Find(ctx, filter, "status", "-updated_at")
+	results, err := dao.App.Find(ctx, filter, &dao.FindOptions{SortFields: []string{"status", "-updated_at"}})
 	if err != nil {
 		logger.Error(ctx, err)
 		return nil, err
@@ -89,6 +91,7 @@ func (s *sApp) List(ctx context.Context) ([]*model.App, error) {
 	for _, result := range results {
 		items = append(items, &model.App{
 			Id:             result.Id,
+			UserId:         result.UserId,
 			AppId:          result.AppId,
 			Name:           result.Name,
 			Models:         result.Models,
@@ -96,11 +99,13 @@ func (s *sApp) List(ctx context.Context) ([]*model.App, error) {
 			Quota:          result.Quota,
 			UsedQuota:      result.UsedQuota,
 			QuotaExpiresAt: result.QuotaExpiresAt,
+			IsBindGroup:    result.IsBindGroup,
+			Group:          result.Group,
 			IpWhitelist:    result.IpWhitelist,
 			IpBlacklist:    result.IpBlacklist,
 			Remark:         result.Remark,
 			Status:         result.Status,
-			UserId:         result.UserId,
+			Rid:            result.Rid,
 		})
 	}
 
@@ -164,11 +169,6 @@ func (s *sApp) SaveCacheApp(ctx context.Context, app *model.App) error {
 		return errors.New("app is nil")
 	}
 
-	if _, err := redis.Set(ctx, fmt.Sprintf(consts.API_APP_KEY, app.AppId), app); err != nil {
-		logger.Error(ctx, err)
-		return err
-	}
-
 	service.Session().SaveApp(ctx, app)
 
 	if err := s.appCache.Set(ctx, app.AppId, app, 0); err != nil {
@@ -202,30 +202,7 @@ func (s *sApp) GetCacheApp(ctx context.Context, appId int) (*model.App, error) {
 		return app, nil
 	}
 
-	reply, err := redis.Get(ctx, fmt.Sprintf(consts.API_APP_KEY, appId))
-	if err != nil {
-		logger.Error(ctx, err)
-		return nil, err
-	}
-
-	if reply == nil || reply.IsNil() {
-		return nil, errors.New("app is nil")
-	}
-
-	app := new(model.App)
-	if err = reply.Struct(&app); err != nil {
-		logger.Error(ctx, err)
-		return nil, err
-	}
-
-	service.Session().SaveApp(ctx, app)
-
-	if err = s.appCache.Set(ctx, app.AppId, app, 0); err != nil {
-		logger.Error(ctx, err)
-		return nil, err
-	}
-
-	return app, nil
+	return nil, errors.New("app is nil")
 }
 
 // 更新缓存中的应用信息
@@ -238,6 +215,7 @@ func (s *sApp) UpdateCacheApp(ctx context.Context, app *entity.App) {
 
 	if err := s.SaveCacheApp(ctx, &model.App{
 		Id:             app.Id,
+		UserId:         app.UserId,
 		AppId:          app.AppId,
 		Name:           app.Name,
 		Models:         app.Models,
@@ -245,10 +223,12 @@ func (s *sApp) UpdateCacheApp(ctx context.Context, app *entity.App) {
 		Quota:          app.Quota,
 		UsedQuota:      app.UsedQuota,
 		QuotaExpiresAt: app.QuotaExpiresAt,
+		IsBindGroup:    app.IsBindGroup,
+		Group:          app.Group,
 		IpWhitelist:    app.IpWhitelist,
 		IpBlacklist:    app.IpBlacklist,
 		Status:         app.Status,
-		UserId:         app.UserId,
+		Rid:            app.Rid,
 	}); err != nil {
 		logger.Error(ctx, err)
 	}
@@ -267,10 +247,6 @@ func (s *sApp) RemoveCacheApp(ctx context.Context, appId int) {
 	}
 
 	if _, err := s.appQuotaCache.Remove(ctx, appId); err != nil {
-		logger.Error(ctx, err)
-	}
-
-	if _, err := redis.Del(ctx, fmt.Sprintf(consts.API_APP_KEY, appId)); err != nil {
 		logger.Error(ctx, err)
 	}
 }
@@ -315,12 +291,7 @@ func (s *sApp) SaveCacheAppKey(ctx context.Context, key *model.Key) error {
 	}()
 
 	if key == nil {
-		return errors.New("key is nil")
-	}
-
-	if _, err := redis.Set(ctx, fmt.Sprintf(consts.API_APP_KEY_KEY, key.Key), key); err != nil {
-		logger.Error(ctx, err)
-		return err
+		return errors.New("appKey is nil")
 	}
 
 	service.Session().SaveKey(ctx, key)
@@ -356,30 +327,7 @@ func (s *sApp) GetCacheAppKey(ctx context.Context, secretKey string) (*model.Key
 		return key, nil
 	}
 
-	reply, err := redis.Get(ctx, fmt.Sprintf(consts.API_APP_KEY_KEY, secretKey))
-	if err != nil {
-		logger.Error(ctx, err)
-		return nil, err
-	}
-
-	if reply == nil || reply.IsNil() {
-		return nil, errors.New("key is nil")
-	}
-
-	key := new(model.Key)
-	if err = reply.Struct(&key); err != nil {
-		logger.Error(ctx, err)
-		return nil, err
-	}
-
-	service.Session().SaveKey(ctx, key)
-
-	if err = s.appKeyCache.Set(ctx, key.Key, key, 0); err != nil {
-		logger.Error(ctx, err)
-		return nil, err
-	}
-
-	return key, nil
+	return nil, errors.New("appKey is nil")
 }
 
 // 更新缓存中的应用密钥信息
@@ -405,9 +353,12 @@ func (s *sApp) UpdateCacheAppKey(ctx context.Context, key *entity.Key) {
 		QuotaExpiresRule:    key.QuotaExpiresRule,
 		QuotaExpiresAt:      key.QuotaExpiresAt,
 		QuotaExpiresMinutes: key.QuotaExpiresMinutes,
+		IsBindGroup:         key.IsBindGroup,
+		Group:               key.Group,
 		IpWhitelist:         key.IpWhitelist,
 		IpBlacklist:         key.IpBlacklist,
 		Status:              key.Status,
+		Rid:                 key.Rid,
 	}); err != nil {
 		logger.Error(ctx, err)
 	}
@@ -426,10 +377,6 @@ func (s *sApp) RemoveCacheAppKey(ctx context.Context, secretKey string) {
 	}
 
 	if _, err := s.appKeyQuotaCache.Remove(ctx, secretKey); err != nil {
-		logger.Error(ctx, err)
-	}
-
-	if _, err := redis.Del(ctx, fmt.Sprintf(consts.API_APP_KEY_KEY, secretKey)); err != nil {
 		logger.Error(ctx, err)
 	}
 }

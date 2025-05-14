@@ -1,11 +1,9 @@
 package model_agent
 
 import (
-	"cmp"
 	"context"
 	"fmt"
 	"github.com/gogf/gf/v2/encoding/gjson"
-	"github.com/gogf/gf/v2/frame/g"
 	"github.com/gogf/gf/v2/os/gtime"
 	"github.com/iimeta/fastapi/internal/config"
 	"github.com/iimeta/fastapi/internal/consts"
@@ -23,11 +21,13 @@ import (
 )
 
 type sModelAgent struct {
-	modelAgentCache               *cache.Cache // [模型代理ID]模型代理
-	modelAgentsCache              *cache.Cache // [模型ID][]模型代理列表
-	modelAgentsRoundRobinCache    *cache.Cache // [模型ID]模型代理下标索引
-	modelAgentKeysCache           *cache.Cache // [模型代理ID][]模型代理密钥列表
-	modelAgentKeysRoundRobinCache *cache.Cache // [模型代理ID]模型代理密钥下标索引
+	modelAgentCache                 *cache.Cache // [模型代理ID]模型代理
+	modelAgentKeysCache             *cache.Cache // [模型代理ID][]模型代理密钥列表
+	modelAgentKeysRoundRobinCache   *cache.Cache // [模型代理ID]模型代理密钥下标索引
+	modelAgentsCache                *cache.Cache // [模型ID][]模型代理列表
+	modelAgentsRoundRobinCache      *cache.Cache // [模型ID]模型代理下标索引
+	groupModelAgentsCache           *cache.Cache // [分组ID][]模型代理列表
+	groupModelAgentsRoundRobinCache *cache.Cache // [分组ID]模型代理下标索引
 }
 
 func init() {
@@ -36,11 +36,13 @@ func init() {
 
 func New() service.IModelAgent {
 	return &sModelAgent{
-		modelAgentsCache:              cache.New(),
-		modelAgentsRoundRobinCache:    cache.New(),
-		modelAgentKeysRoundRobinCache: cache.New(),
-		modelAgentCache:               cache.New(),
-		modelAgentKeysCache:           cache.New(),
+		modelAgentCache:                 cache.New(),
+		modelAgentKeysCache:             cache.New(),
+		modelAgentKeysRoundRobinCache:   cache.New(),
+		modelAgentsCache:                cache.New(),
+		modelAgentsRoundRobinCache:      cache.New(),
+		groupModelAgentsCache:           cache.New(),
+		groupModelAgentsRoundRobinCache: cache.New(),
 	}
 }
 
@@ -59,14 +61,19 @@ func (s *sModelAgent) GetModelAgentById(ctx context.Context, id string) (*model.
 	}
 
 	return &model.ModelAgent{
-		Id:         modelAgent.Id,
-		Corp:       modelAgent.Corp,
-		Name:       modelAgent.Name,
-		BaseUrl:    modelAgent.BaseUrl,
-		Path:       modelAgent.Path,
-		Weight:     modelAgent.Weight,
-		LbStrategy: modelAgent.LbStrategy,
-		Status:     modelAgent.Status,
+		Id:                   modelAgent.Id,
+		Corp:                 modelAgent.Corp,
+		Name:                 modelAgent.Name,
+		BaseUrl:              modelAgent.BaseUrl,
+		Path:                 modelAgent.Path,
+		Weight:               modelAgent.Weight,
+		Models:               modelAgent.Models,
+		IsEnableModelReplace: modelAgent.IsEnableModelReplace,
+		ReplaceModels:        modelAgent.ReplaceModels,
+		TargetModels:         modelAgent.TargetModels,
+		IsNeverDisable:       modelAgent.IsNeverDisable,
+		LbStrategy:           modelAgent.LbStrategy,
+		Status:               modelAgent.Status,
 	}, nil
 }
 
@@ -84,7 +91,7 @@ func (s *sModelAgent) List(ctx context.Context, ids []string) ([]*model.ModelAge
 		},
 	}
 
-	results, err := dao.ModelAgent.Find(ctx, filter, "status", "-weight")
+	results, err := dao.ModelAgent.Find(ctx, filter, &dao.FindOptions{SortFields: []string{"status", "-weight", "-updated_at"}})
 	if err != nil {
 		logger.Error(ctx, err)
 		return nil, err
@@ -97,28 +104,28 @@ func (s *sModelAgent) List(ctx context.Context, ids []string) ([]*model.ModelAge
 	}
 
 	modelMap := make(map[string][]string)
-	modelNameMap := make(map[string][]string)
-
 	for _, model := range modelList {
 		for _, id := range model.ModelAgents {
 			modelMap[id] = append(modelMap[id], model.Id)
-			modelNameMap[id] = append(modelNameMap[id], model.Name)
 		}
 	}
 
 	items := make([]*model.ModelAgent, 0)
 	for _, result := range results {
 		items = append(items, &model.ModelAgent{
-			Id:         result.Id,
-			Corp:       result.Corp,
-			Name:       result.Name,
-			BaseUrl:    result.BaseUrl,
-			Path:       result.Path,
-			Weight:     result.Weight,
-			LbStrategy: result.LbStrategy,
-			Models:     modelMap[result.Id],
-			ModelNames: modelNameMap[result.Id],
-			Status:     result.Status,
+			Id:                   result.Id,
+			Corp:                 result.Corp,
+			Name:                 result.Name,
+			BaseUrl:              result.BaseUrl,
+			Path:                 result.Path,
+			Weight:               result.Weight,
+			Models:               modelMap[result.Id],
+			IsEnableModelReplace: result.IsEnableModelReplace,
+			ReplaceModels:        result.ReplaceModels,
+			TargetModels:         result.TargetModels,
+			IsNeverDisable:       result.IsNeverDisable,
+			LbStrategy:           result.LbStrategy,
+			Status:               result.Status,
 		})
 	}
 
@@ -135,7 +142,7 @@ func (s *sModelAgent) ListAll(ctx context.Context) ([]*model.ModelAgent, error) 
 
 	filter := bson.M{}
 
-	results, err := dao.ModelAgent.Find(ctx, filter, "status", "-weight")
+	results, err := dao.ModelAgent.Find(ctx, filter, &dao.FindOptions{SortFields: []string{"status", "-weight", "-updated_at"}})
 	if err != nil {
 		logger.Error(ctx, err)
 		return nil, err
@@ -148,28 +155,28 @@ func (s *sModelAgent) ListAll(ctx context.Context) ([]*model.ModelAgent, error) 
 	}
 
 	modelMap := make(map[string][]string)
-	modelNameMap := make(map[string][]string)
-
 	for _, model := range modelList {
 		for _, id := range model.ModelAgents {
 			modelMap[id] = append(modelMap[id], model.Id)
-			modelNameMap[id] = append(modelNameMap[id], model.Name)
 		}
 	}
 
 	items := make([]*model.ModelAgent, 0)
 	for _, result := range results {
 		items = append(items, &model.ModelAgent{
-			Id:         result.Id,
-			Corp:       result.Corp,
-			Name:       result.Name,
-			BaseUrl:    result.BaseUrl,
-			Path:       result.Path,
-			Weight:     result.Weight,
-			LbStrategy: result.LbStrategy,
-			Models:     modelMap[result.Id],
-			ModelNames: modelNameMap[result.Id],
-			Status:     result.Status,
+			Id:                   result.Id,
+			Corp:                 result.Corp,
+			Name:                 result.Name,
+			BaseUrl:              result.BaseUrl,
+			Path:                 result.Path,
+			Weight:               result.Weight,
+			Models:               modelMap[result.Id],
+			IsEnableModelReplace: result.IsEnableModelReplace,
+			ReplaceModels:        result.ReplaceModels,
+			TargetModels:         result.TargetModels,
+			IsNeverDisable:       result.IsNeverDisable,
+			LbStrategy:           result.LbStrategy,
+			Status:               result.Status,
 		})
 	}
 
@@ -184,7 +191,7 @@ func (s *sModelAgent) GetModelAgentKeys(ctx context.Context, id string) ([]*mode
 		logger.Debugf(ctx, "sModelAgent GetModelAgentKeys time: %d", gtime.TimestampMilli()-now)
 	}()
 
-	results, err := dao.Key.Find(ctx, bson.M{"type": 2, "model_agents": bson.M{"$in": []string{id}}})
+	results, err := dao.Key.Find(ctx, bson.M{"type": 2, "model_agents": bson.M{"$in": []string{id}}}, &dao.FindOptions{SortFields: []string{"status", "-weight", "-updated_at"}})
 	if err != nil {
 		logger.Error(ctx, err)
 		return nil, err
@@ -202,10 +209,13 @@ func (s *sModelAgent) GetModelAgentKeys(ctx context.Context, id string) ([]*mode
 			Weight:         result.Weight,
 			Models:         result.Models,
 			ModelAgents:    result.ModelAgents,
+			IsNeverDisable: result.IsNeverDisable,
 			IsLimitQuota:   result.IsLimitQuota,
 			Quota:          result.Quota,
 			UsedQuota:      result.UsedQuota,
 			QuotaExpiresAt: result.QuotaExpiresAt,
+			IsBindGroup:    result.IsBindGroup,
+			Group:          result.Group,
 			IpWhitelist:    result.IpWhitelist,
 			IpBlacklist:    result.IpBlacklist,
 			Status:         result.Status,
@@ -213,6 +223,57 @@ func (s *sModelAgent) GetModelAgentKeys(ctx context.Context, id string) ([]*mode
 	}
 
 	return items, nil
+}
+
+// 获取模型代理与密钥列表
+func (s *sModelAgent) GetModelAgentsAndKeys(ctx context.Context) ([]*model.ModelAgent, map[string][]*model.Key, error) {
+
+	now := gtime.TimestampMilli()
+	defer func() {
+		logger.Debugf(ctx, "sModelAgent GetModelAgentsAndKeys time: %d", gtime.TimestampMilli()-now)
+	}()
+
+	modelAgents, err := s.ListAll(ctx)
+	if err != nil {
+		logger.Error(ctx, err)
+		return nil, nil, err
+	}
+
+	results, err := dao.Key.Find(ctx, bson.M{"type": 2}, &dao.FindOptions{SortFields: []string{"status", "-weight", "-updated_at"}})
+	if err != nil {
+		logger.Error(ctx, err)
+		return nil, nil, err
+	}
+
+	modelAgentKeyMap := make(map[string][]*model.Key)
+	for _, result := range results {
+
+		key := &model.Key{
+			Id:             result.Id,
+			UserId:         result.UserId,
+			AppId:          result.AppId,
+			Corp:           result.Corp,
+			Key:            result.Key,
+			Type:           result.Type,
+			Weight:         result.Weight,
+			Models:         result.Models,
+			ModelAgents:    result.ModelAgents,
+			IsNeverDisable: result.IsNeverDisable,
+			IsLimitQuota:   result.IsLimitQuota,
+			Quota:          result.Quota,
+			UsedQuota:      result.UsedQuota,
+			QuotaExpiresAt: result.QuotaExpiresAt,
+			IpWhitelist:    result.IpWhitelist,
+			IpBlacklist:    result.IpBlacklist,
+			Status:         result.Status,
+		}
+
+		for _, modelAgentId := range result.ModelAgents {
+			modelAgentKeyMap[modelAgentId] = append(modelAgentKeyMap[modelAgentId], key)
+		}
+	}
+
+	return modelAgents, modelAgentKeyMap, nil
 }
 
 // 挑选模型代理
@@ -312,6 +373,103 @@ func (s *sModelAgent) PickModelAgent(ctx context.Context, m *model.Model) (int, 
 	return len(filterModelAgentList), filterModelAgentList[roundRobin.Index(len(filterModelAgentList))], nil
 }
 
+// 根据模型挑选分组模型代理
+func (s *sModelAgent) PickGroupModelAgent(ctx context.Context, m *model.Model, group *model.Group) (int, *model.ModelAgent, error) {
+
+	now := gtime.TimestampMilli()
+	defer func() {
+		logger.Debugf(ctx, "sModelAgent PickGroupModelAgent time: %d", gtime.TimestampMilli()-now)
+	}()
+
+	var (
+		modelAgents []*model.ModelAgent
+		roundRobin  *lb.RoundRobin
+		err         error
+	)
+
+	if modelAgentsValue := s.groupModelAgentsCache.GetVal(ctx, group.Id); modelAgentsValue != nil {
+		modelAgents = modelAgentsValue.([]*model.ModelAgent)
+	}
+
+	if len(modelAgents) != len(group.ModelAgents) {
+
+		modelAgents, err = s.GetCacheList(ctx, group.ModelAgents...)
+		if err != nil || len(modelAgents) != len(group.ModelAgents) {
+
+			if modelAgents, err = s.List(ctx, group.ModelAgents); err != nil {
+				logger.Error(ctx, err)
+				return 0, nil, err
+			}
+
+			if err = s.SaveCacheList(ctx, modelAgents); err != nil {
+				logger.Error(ctx, err)
+				return 0, nil, err
+			}
+		}
+
+		if len(modelAgents) == 0 {
+			return 0, nil, errors.ERR_NO_AVAILABLE_MODEL_AGENT
+		}
+
+		if err = s.groupModelAgentsCache.Set(ctx, group.Id, modelAgents, 0); err != nil {
+			logger.Error(ctx, err)
+			return 0, nil, err
+		}
+	}
+
+	modelAgentList := make([]*model.ModelAgent, 0)
+	for _, modelAgent := range modelAgents {
+		// 过滤被禁用的模型代理
+		if modelAgent.Status == 1 && slices.Contains(modelAgent.Models, m.Id) {
+			modelAgentList = append(modelAgentList, modelAgent)
+		}
+	}
+
+	if len(modelAgentList) == 0 {
+		return 0, nil, errors.ERR_NO_AVAILABLE_MODEL_AGENT
+	}
+
+	filterModelAgentList := make([]*model.ModelAgent, 0)
+	if len(modelAgentList) > 1 {
+		errorModelAgents := service.Session().GetErrorModelAgents(ctx)
+		if len(errorModelAgents) > 0 {
+			for _, modelAgent := range modelAgentList {
+				// 过滤错误的模型代理
+				if !slices.Contains(errorModelAgents, modelAgent.Id) {
+					filterModelAgentList = append(filterModelAgentList, modelAgent)
+				}
+			}
+		} else {
+			filterModelAgentList = modelAgentList
+		}
+	} else {
+		filterModelAgentList = modelAgentList
+	}
+
+	if len(filterModelAgentList) == 0 {
+		return 0, nil, errors.ERR_ALL_MODEL_AGENT
+	}
+
+	// 负载策略-权重
+	if group.LbStrategy == 2 {
+		return len(filterModelAgentList), lb.NewModelAgentWeight(filterModelAgentList).PickModelAgent(), nil
+	}
+
+	if roundRobinValue := s.groupModelAgentsRoundRobinCache.GetVal(ctx, group.Id); roundRobinValue != nil {
+		roundRobin = roundRobinValue.(*lb.RoundRobin)
+	}
+
+	if roundRobin == nil {
+		roundRobin = lb.NewRoundRobin()
+		if err = s.groupModelAgentsRoundRobinCache.Set(ctx, group.Id, roundRobin, 0); err != nil {
+			logger.Error(ctx, err)
+			return 0, nil, err
+		}
+	}
+
+	return len(filterModelAgentList), filterModelAgentList[roundRobin.Index(len(filterModelAgentList))], nil
+}
+
 // 移除模型代理
 func (s *sModelAgent) RemoveModelAgent(ctx context.Context, m *model.Model, modelAgent *model.ModelAgent) {
 
@@ -371,6 +529,11 @@ func (s *sModelAgent) DisabledModelAgent(ctx context.Context, modelAgent *model.
 	defer func() {
 		logger.Debugf(ctx, "sModelAgent DisabledModelAgent time: %d", gtime.TimestampMilli()-now)
 	}()
+
+	// 永不禁用
+	if modelAgent.IsNeverDisable {
+		return
+	}
 
 	modelAgent.Status = 2
 	modelAgent.IsAutoDisabled = true
@@ -539,6 +702,11 @@ func (s *sModelAgent) DisabledModelAgentKey(ctx context.Context, key *model.Key,
 		logger.Debugf(ctx, "sModelAgent DisabledModelAgentKey time: %d", gtime.TimestampMilli()-now)
 	}()
 
+	// 永不禁用
+	if key.IsNeverDisable {
+		return
+	}
+
 	s.UpdateCacheModelAgentKey(ctx, nil, &entity.Key{
 		Id:                 key.Id,
 		UserId:             key.UserId,
@@ -549,10 +717,13 @@ func (s *sModelAgent) DisabledModelAgentKey(ctx context.Context, key *model.Key,
 		Weight:             key.Weight,
 		Models:             key.Models,
 		ModelAgents:        key.ModelAgents,
+		IsNeverDisable:     key.IsNeverDisable,
 		IsLimitQuota:       key.IsLimitQuota,
 		Quota:              key.Quota,
 		UsedQuota:          key.UsedQuota,
 		QuotaExpiresAt:     key.QuotaExpiresAt,
+		IsBindGroup:        key.IsBindGroup,
+		Group:              key.Group,
 		IpWhitelist:        key.IpWhitelist,
 		IpBlacklist:        key.IpBlacklist,
 		Status:             2,
@@ -577,17 +748,8 @@ func (s *sModelAgent) SaveCacheList(ctx context.Context, modelAgents []*model.Mo
 		logger.Debugf(ctx, "sModelAgent SaveCacheList time: %d", gtime.TimestampMilli()-now)
 	}()
 
-	fields := g.Map{}
 	for _, modelAgent := range modelAgents {
-		fields[modelAgent.Id] = modelAgent
 		if err := s.modelAgentCache.Set(ctx, modelAgent.Id, modelAgent, 0); err != nil {
-			logger.Error(ctx, err)
-			return err
-		}
-	}
-
-	if len(fields) > 0 {
-		if _, err := redis.HSet(ctx, consts.API_MODEL_AGENTS_KEY, fields); err != nil {
 			logger.Error(ctx, err)
 			return err
 		}
@@ -605,52 +767,9 @@ func (s *sModelAgent) GetCacheList(ctx context.Context, ids ...string) ([]*model
 	}()
 
 	items := make([]*model.ModelAgent, 0)
-
 	for _, id := range ids {
 		if modelAgentCacheValue := s.modelAgentCache.GetVal(ctx, id); modelAgentCacheValue != nil {
 			items = append(items, modelAgentCacheValue.(*model.ModelAgent))
-		}
-	}
-
-	if len(items) == len(ids) {
-		return items, nil
-	}
-
-	reply, err := redis.HMGet(ctx, consts.API_MODEL_AGENTS_KEY, ids...)
-	if err != nil {
-		logger.Error(ctx, err)
-		return nil, err
-	}
-
-	if reply == nil || len(reply) == 0 {
-		if len(items) != 0 {
-			return items, nil
-		}
-		return nil, errors.New("modelAgentsCache is nil")
-	}
-
-	for _, str := range reply.Strings() {
-
-		if str == "" {
-			continue
-		}
-
-		result := new(model.ModelAgent)
-		if err = gjson.Unmarshal([]byte(str), &result); err != nil {
-			logger.Error(ctx, err)
-			return nil, err
-		}
-
-		if s.modelAgentCache.ContainsKey(ctx, result.Id) {
-			continue
-		}
-
-		if result.Status == 1 {
-			items = append(items, result)
-			if err = s.modelAgentCache.Set(ctx, result.Id, result, 0); err != nil {
-				logger.Error(ctx, err)
-				return nil, err
-			}
 		}
 	}
 
@@ -670,15 +789,19 @@ func (s *sModelAgent) CreateCacheModelAgent(ctx context.Context, newData *model.
 	}()
 
 	if err := s.SaveCacheList(ctx, []*model.ModelAgent{{
-		Id:         newData.Id,
-		Corp:       newData.Corp,
-		Name:       newData.Name,
-		BaseUrl:    newData.BaseUrl,
-		Path:       newData.Path,
-		Weight:     newData.Weight,
-		LbStrategy: newData.LbStrategy,
-		Models:     newData.Models,
-		Status:     newData.Status,
+		Id:                   newData.Id,
+		Corp:                 newData.Corp,
+		Name:                 newData.Name,
+		BaseUrl:              newData.BaseUrl,
+		Path:                 newData.Path,
+		Weight:               newData.Weight,
+		Models:               newData.Models,
+		IsEnableModelReplace: newData.IsEnableModelReplace,
+		ReplaceModels:        newData.ReplaceModels,
+		TargetModels:         newData.TargetModels,
+		IsNeverDisable:       newData.IsNeverDisable,
+		LbStrategy:           newData.LbStrategy,
+		Status:               newData.Status,
 	}}); err != nil {
 		logger.Error(ctx, err)
 	}
@@ -702,17 +825,21 @@ func (s *sModelAgent) UpdateCacheModelAgent(ctx context.Context, oldData *model.
 	}()
 
 	if err := s.SaveCacheList(ctx, []*model.ModelAgent{{
-		Id:                 newData.Id,
-		Corp:               newData.Corp,
-		Name:               newData.Name,
-		BaseUrl:            newData.BaseUrl,
-		Path:               newData.Path,
-		Weight:             newData.Weight,
-		LbStrategy:         newData.LbStrategy,
-		Models:             newData.Models,
-		Status:             newData.Status,
-		IsAutoDisabled:     newData.IsAutoDisabled,
-		AutoDisabledReason: newData.AutoDisabledReason,
+		Id:                   newData.Id,
+		Corp:                 newData.Corp,
+		Name:                 newData.Name,
+		BaseUrl:              newData.BaseUrl,
+		Path:                 newData.Path,
+		Weight:               newData.Weight,
+		Models:               newData.Models,
+		IsEnableModelReplace: newData.IsEnableModelReplace,
+		ReplaceModels:        newData.ReplaceModels,
+		TargetModels:         newData.TargetModels,
+		IsNeverDisable:       newData.IsNeverDisable,
+		LbStrategy:           newData.LbStrategy,
+		Status:               newData.Status,
+		IsAutoDisabled:       newData.IsAutoDisabled,
+		AutoDisabledReason:   newData.AutoDisabledReason,
 	}}); err != nil {
 		logger.Error(ctx, err)
 	}
@@ -779,6 +906,32 @@ func (s *sModelAgent) UpdateCacheModelAgent(ctx context.Context, oldData *model.
 			}
 		}
 	}
+
+	if groups, err := s.groupModelAgentsCache.Keys(ctx); err == nil {
+		for _, id := range groups {
+
+			if modelAgentsValue := s.groupModelAgentsCache.GetVal(ctx, id); modelAgentsValue != nil {
+
+				if modelAgents := modelAgentsValue.([]*model.ModelAgent); len(modelAgents) > 0 {
+
+					newModelAgents := make([]*model.ModelAgent, 0)
+					for _, agent := range modelAgents {
+						if agent.Id != newData.Id {
+							newModelAgents = append(newModelAgents, agent)
+						} else {
+							newModelAgents = append(newModelAgents, newData)
+						}
+					}
+
+					if err := s.groupModelAgentsCache.Set(ctx, id, newModelAgents, 0); err != nil {
+						logger.Error(ctx, err)
+					}
+				}
+			}
+		}
+	} else {
+		logger.Error(ctx, err)
+	}
 }
 
 // 移除缓存中的模型代理
@@ -809,7 +962,27 @@ func (s *sModelAgent) RemoveCacheModelAgent(ctx context.Context, modelAgent *mod
 		}
 	}
 
-	if _, err := redis.HDel(ctx, consts.API_MODEL_AGENTS_KEY, modelAgent.Id); err != nil {
+	if groups, err := s.groupModelAgentsCache.Keys(ctx); err == nil {
+		for _, id := range groups {
+
+			if modelAgentsValue := s.groupModelAgentsCache.GetVal(ctx, id); modelAgentsValue != nil {
+
+				if modelAgents := modelAgentsValue.([]*model.ModelAgent); len(modelAgents) > 0 {
+
+					newModelAgents := make([]*model.ModelAgent, 0)
+					for _, agent := range modelAgents {
+						if agent.Id != modelAgent.Id {
+							newModelAgents = append(newModelAgents, agent)
+						}
+					}
+
+					if err := s.groupModelAgentsCache.Set(ctx, id, newModelAgents, 0); err != nil {
+						logger.Error(ctx, err)
+					}
+				}
+			}
+		}
+	} else {
 		logger.Error(ctx, err)
 	}
 
@@ -823,25 +996,12 @@ func (s *sModelAgent) SaveCacheModelAgentKeys(ctx context.Context, id string, ke
 
 	now := gtime.TimestampMilli()
 	defer func() {
-		logger.Debugf(ctx, "sModelAgent SaveCacheModelAgentKeys time: %d", gtime.TimestampMilli()-now)
+		logger.Debugf(ctx, "sModelAgent SaveCacheModelAgentKeys keys: %d, time: %d", len(keys), gtime.TimestampMilli()-now)
 	}()
 
-	fields := g.Map{}
-	for _, key := range keys {
-		fields[key.Id] = key
-	}
-
-	if len(fields) > 0 {
-
-		if _, err := redis.HSet(ctx, fmt.Sprintf(consts.API_MODEL_AGENT_KEYS_KEY, id), fields); err != nil {
-			logger.Error(ctx, err)
-			return err
-		}
-
-		if err := s.modelAgentKeysCache.Set(ctx, id, keys, 0); err != nil {
-			logger.Error(ctx, err)
-			return err
-		}
+	if err := s.modelAgentKeysCache.Set(ctx, id, keys, 0); err != nil {
+		logger.Error(ctx, err)
+		return err
 	}
 
 	return nil
@@ -859,48 +1019,7 @@ func (s *sModelAgent) GetCacheModelAgentKeys(ctx context.Context, id string) ([]
 		return modelAgentKeysCacheValue.([]*model.Key), nil
 	}
 
-	reply, err := redis.HVals(ctx, fmt.Sprintf(consts.API_MODEL_AGENT_KEYS_KEY, id))
-	if err != nil {
-		logger.Error(ctx, err)
-		return nil, err
-	}
-
-	if reply == nil || len(reply) == 0 {
-		return nil, errors.New("modelAgentKeys is nil")
-	}
-
-	items := make([]*model.Key, 0)
-	for _, str := range reply.Strings() {
-
-		if str == "" {
-			continue
-		}
-
-		result := new(model.Key)
-		if err = gjson.Unmarshal([]byte(str), &result); err != nil {
-			logger.Error(ctx, err)
-			return nil, err
-		}
-
-		if result.Status == 1 {
-			items = append(items, result)
-		}
-	}
-
-	if len(items) == 0 {
-		return nil, errors.New("modelAgentKeys is nil")
-	}
-
-	slices.SortFunc(items, func(k1, k2 *model.Key) int {
-		return cmp.Compare(k1.Id, k2.Id)
-	})
-
-	if err = s.modelAgentKeysCache.Set(ctx, id, items, 0); err != nil {
-		logger.Error(ctx, err)
-		return nil, err
-	}
-
-	return items, nil
+	return nil, errors.New("modelAgentKeys is nil")
 }
 
 // 新增模型代理密钥到缓存列表中
@@ -921,10 +1040,13 @@ func (s *sModelAgent) CreateCacheModelAgentKey(ctx context.Context, key *entity.
 		Weight:         key.Weight,
 		Models:         key.Models,
 		ModelAgents:    key.ModelAgents,
+		IsNeverDisable: key.IsNeverDisable,
 		IsLimitQuota:   key.IsLimitQuota,
 		Quota:          key.Quota,
 		UsedQuota:      key.UsedQuota,
 		QuotaExpiresAt: key.QuotaExpiresAt,
+		IsBindGroup:    key.IsBindGroup,
+		Group:          key.Group,
 		IpWhitelist:    key.IpWhitelist,
 		IpBlacklist:    key.IpBlacklist,
 		Status:         key.Status,
@@ -962,10 +1084,13 @@ func (s *sModelAgent) UpdateCacheModelAgentKey(ctx context.Context, oldData *ent
 		Weight:             newData.Weight,
 		Models:             newData.Models,
 		ModelAgents:        newData.ModelAgents,
+		IsNeverDisable:     newData.IsNeverDisable,
 		IsLimitQuota:       newData.IsLimitQuota,
 		Quota:              newData.Quota,
 		UsedQuota:          newData.UsedQuota,
 		QuotaExpiresAt:     newData.QuotaExpiresAt,
+		IsBindGroup:        newData.IsBindGroup,
+		Group:              newData.Group,
 		IpWhitelist:        newData.IpWhitelist,
 		IpBlacklist:        newData.IpBlacklist,
 		Status:             newData.Status,
@@ -983,11 +1108,9 @@ func (s *sModelAgent) UpdateCacheModelAgentKey(ctx context.Context, oldData *ent
 		modelAgentKeys, err := s.GetCacheModelAgentKeys(ctx, id)
 		if err != nil {
 			logger.Error(ctx, err)
-			if modelAgentKeys, err = s.GetModelAgentKeys(ctx, id); err != nil {
-				logger.Error(ctx, err)
-				continue
-			}
-		} else if len(modelAgentKeys) == 0 {
+		}
+
+		if len(modelAgentKeys) == 0 {
 			if modelAgentKeys, err = s.GetModelAgentKeys(ctx, id); err != nil {
 				logger.Error(ctx, err)
 				continue
@@ -1039,24 +1162,17 @@ func (s *sModelAgent) UpdateCacheModelAgentKey(ctx context.Context, oldData *ent
 					}
 				}
 
-				if len(modelAgentKeys) > 0 {
+				if len(modelAgentKeys) > 0 && s.modelAgentKeysCache.ContainsKey(ctx, id) {
 
 					newKeys := make([]*model.Key, 0)
 					for _, k := range modelAgentKeys {
-
 						if k.Id != oldData.Id {
 							newKeys = append(newKeys, k)
-						} else {
-							if _, err = redis.HDel(ctx, fmt.Sprintf(consts.API_MODEL_AGENT_KEYS_KEY, id), oldData.Id); err != nil {
-								logger.Error(ctx, err)
-							}
 						}
 					}
 
-					if s.modelAgentKeysCache.ContainsKey(ctx, id) {
-						if err = s.modelAgentKeysCache.Set(ctx, id, newKeys, 0); err != nil {
-							logger.Error(ctx, err)
-						}
+					if err = s.modelAgentKeysCache.Set(ctx, id, newKeys, 0); err != nil {
+						logger.Error(ctx, err)
 					}
 				}
 			}
@@ -1073,10 +1189,6 @@ func (s *sModelAgent) RemoveCacheModelAgentKey(ctx context.Context, key *entity.
 	}()
 
 	for _, id := range key.ModelAgents {
-
-		if _, err := redis.HDel(ctx, fmt.Sprintf(consts.API_MODEL_AGENT_KEYS_KEY, id), key.Id); err != nil {
-			logger.Error(ctx, err)
-		}
 
 		if modelAgentKeysValue := s.modelAgentKeysCache.GetVal(ctx, id); modelAgentKeysValue != nil {
 
@@ -1175,6 +1287,40 @@ func (s *sModelAgent) GetFallbackModelAgent(ctx context.Context, model *model.Mo
 	}
 
 	return fallbackModelAgent, nil
+}
+
+// 保存分组模型代理列表到缓存
+func (s *sModelAgent) SaveGroupModelAgentsCache(ctx context.Context, group *model.Group) error {
+
+	now := gtime.TimestampMilli()
+	defer func() {
+		logger.Debugf(ctx, "sModelAgent SaveGroupModelAgentsCache time: %d", gtime.TimestampMilli()-now)
+	}()
+
+	if len(group.ModelAgents) == 0 {
+		return nil
+	}
+
+	modelAgents, err := s.GetCacheList(ctx, group.ModelAgents...)
+	if err != nil || len(modelAgents) != len(group.ModelAgents) {
+
+		if modelAgents, err = s.List(ctx, group.ModelAgents); err != nil {
+			logger.Error(ctx, err)
+			return err
+		}
+
+		if err = s.SaveCacheList(ctx, modelAgents); err != nil {
+			logger.Error(ctx, err)
+			return err
+		}
+	}
+
+	if err = s.groupModelAgentsCache.Set(ctx, group.Id, modelAgents, 0); err != nil {
+		logger.Error(ctx, err)
+		return err
+	}
+
+	return nil
 }
 
 // 变更订阅

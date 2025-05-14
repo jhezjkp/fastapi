@@ -14,6 +14,7 @@ import (
 	sdk "github.com/iimeta/fastapi-sdk"
 	sdkm "github.com/iimeta/fastapi-sdk/model"
 	"github.com/iimeta/fastapi/internal/config"
+	"github.com/iimeta/fastapi/internal/consts"
 	"github.com/iimeta/fastapi/internal/dao"
 	"github.com/iimeta/fastapi/internal/errors"
 	"github.com/iimeta/fastapi/internal/logic/common"
@@ -23,6 +24,7 @@ import (
 	"github.com/iimeta/fastapi/internal/service"
 	"github.com/iimeta/fastapi/utility/logger"
 	"github.com/iimeta/fastapi/utility/util"
+	"github.com/iimeta/go-openai"
 	"io"
 	"math"
 	"net/http"
@@ -101,8 +103,6 @@ func (s *sRealtime) Realtime(ctx context.Context, r *ghttp.Request, params model
 		if err != nil && mak.ReqModel != nil && mak.RealModel != nil {
 			if err := grpool.Add(gctx.NeverDone(ctx), func(ctx context.Context) {
 
-				mak.RealModel.ModelAgent = mak.ModelAgent
-
 				completionsRes := &model.CompletionsRes{
 					Error:        err,
 					ConnTime:     connTime,
@@ -112,7 +112,7 @@ func (s *sRealtime) Realtime(ctx context.Context, r *ghttp.Request, params model
 					EnterTime:    enterTime,
 				}
 
-				s.SaveLog(ctx, mak.ReqModel, mak.RealModel, fallbackModelAgent, fallbackModel, mak.Key, &sdkm.ChatCompletionRequest{Stream: true}, completionsRes, retryInfo, false)
+				s.SaveLog(ctx, mak.Group, mak.ReqModel, mak.RealModel, mak.ModelAgent, fallbackModelAgent, fallbackModel, mak.Key, &sdkm.ChatCompletionRequest{Stream: true}, completionsRes, retryInfo, false)
 
 			}); err != nil {
 				logger.Error(ctx, err)
@@ -230,7 +230,6 @@ func (s *sRealtime) Realtime(ctx context.Context, r *ghttp.Request, params model
 
 				if err := grpool.Add(gctx.NeverDone(ctx), func(ctx context.Context) {
 
-					mak.RealModel.ModelAgent = mak.ModelAgent
 					enterTime := g.RequestFromCtx(ctx).EnterTime.TimestampMilli()
 					internalTime := gtime.TimestampMilli() - enterTime - totalTime
 
@@ -243,7 +242,7 @@ func (s *sRealtime) Realtime(ctx context.Context, r *ghttp.Request, params model
 						EnterTime:    enterTime,
 					}
 
-					s.SaveLog(ctx, mak.ReqModel, mak.RealModel, fallbackModelAgent, fallbackModel, mak.Key, &sdkm.ChatCompletionRequest{Stream: true}, completionsRes, retryInfo, false)
+					s.SaveLog(ctx, mak.Group, mak.ReqModel, mak.RealModel, mak.ModelAgent, fallbackModelAgent, fallbackModel, mak.Key, &sdkm.ChatCompletionRequest{Stream: true}, completionsRes, retryInfo, false)
 
 				}); err != nil {
 					logger.Error(ctx, err)
@@ -327,7 +326,13 @@ func (s *sRealtime) Realtime(ctx context.Context, r *ghttp.Request, params model
 				}
 
 				if err := grpool.Add(gctx.NeverDone(ctx), func(ctx context.Context) {
-					if err := service.Common().RecordUsage(ctx, totalTokens, mak.Key.Key); err != nil {
+
+					// 分组折扣
+					if mak.Group != nil && slices.Contains(mak.Group.Models, mak.ReqModel.Id) {
+						totalTokens = int(math.Ceil(float64(totalTokens) * mak.Group.Discount))
+					}
+
+					if err := service.Common().RecordUsage(ctx, totalTokens, mak.Key.Key, mak.Group); err != nil {
 						logger.Error(ctx, err)
 						panic(err)
 					}
@@ -337,7 +342,6 @@ func (s *sRealtime) Realtime(ctx context.Context, r *ghttp.Request, params model
 
 				if err := grpool.Add(gctx.NeverDone(ctx), func(ctx context.Context) {
 
-					mak.RealModel.ModelAgent = mak.ModelAgent
 					enterTime := g.RequestFromCtx(ctx).EnterTime.TimestampMilli()
 					internalTime := gtime.TimestampMilli() - enterTime - totalTime
 
@@ -355,7 +359,7 @@ func (s *sRealtime) Realtime(ctx context.Context, r *ghttp.Request, params model
 					completionsRes.Usage = *usage
 					completionsRes.Usage.TotalTokens = totalTokens
 
-					s.SaveLog(ctx, mak.ReqModel, mak.RealModel, fallbackModelAgent, fallbackModel, mak.Key, &sdkm.ChatCompletionRequest{Stream: true, Messages: []sdkm.ChatCompletionMessage{{Content: message}}}, completionsRes, retryInfo, false)
+					s.SaveLog(ctx, mak.Group, mak.ReqModel, mak.RealModel, mak.ModelAgent, fallbackModelAgent, fallbackModel, mak.Key, &sdkm.ChatCompletionRequest{Stream: true, Messages: []sdkm.ChatCompletionMessage{{Content: message}}}, completionsRes, retryInfo, false)
 
 				}); err != nil {
 					logger.Error(ctx, err)
@@ -421,7 +425,7 @@ func (s *sRealtime) Realtime(ctx context.Context, r *ghttp.Request, params model
 }
 
 // 保存日志
-func (s *sRealtime) SaveLog(ctx context.Context, reqModel, realModel *model.Model, fallbackModelAgent *model.ModelAgent, fallbackModel *model.Model, key *model.Key, completionsReq *sdkm.ChatCompletionRequest, completionsRes *model.CompletionsRes, retryInfo *mcommon.Retry, isSmartMatch bool, retry ...int) {
+func (s *sRealtime) SaveLog(ctx context.Context, group *model.Group, reqModel, realModel *model.Model, modelAgent, fallbackModelAgent *model.ModelAgent, fallbackModel *model.Model, key *model.Key, completionsReq *sdkm.ChatCompletionRequest, completionsRes *model.CompletionsRes, retryInfo *mcommon.Retry, isSmartMatch bool, retry ...int) {
 
 	now := gtime.TimestampMilli()
 	defer func() {
@@ -429,34 +433,49 @@ func (s *sRealtime) SaveLog(ctx context.Context, reqModel, realModel *model.Mode
 	}()
 
 	// 不记录此错误日志
-	if completionsRes.Error != nil && (errors.Is(completionsRes.Error, errors.ERR_MODEL_NOT_FOUND) || errors.Is(completionsRes.Error, errors.ERR_MODEL_DISABLED)) {
+	if completionsRes.Error != nil && (errors.Is(completionsRes.Error, errors.ERR_MODEL_NOT_FOUND) ||
+		errors.Is(completionsRes.Error, errors.ERR_MODEL_DISABLED) ||
+		errors.Is(completionsRes.Error, errors.ERR_GROUP_NOT_FOUND) ||
+		errors.Is(completionsRes.Error, errors.ERR_GROUP_DISABLED) ||
+		errors.Is(completionsRes.Error, errors.ERR_GROUP_EXPIRED) ||
+		errors.Is(completionsRes.Error, errors.ERR_GROUP_INSUFFICIENT_QUOTA)) {
 		return
 	}
 
 	chat := do.Chat{
-		TraceId:      gctx.CtxId(ctx),
-		UserId:       service.Session().GetUserId(ctx),
-		AppId:        service.Session().GetAppId(ctx),
-		IsSmartMatch: isSmartMatch,
-		Stream:       completionsReq.Stream,
-		ConnTime:     completionsRes.ConnTime,
-		Duration:     completionsRes.Duration,
-		TotalTime:    completionsRes.TotalTime,
-		InternalTime: completionsRes.InternalTime,
-		ReqTime:      completionsRes.EnterTime,
-		ReqDate:      gtime.NewFromTimeStamp(completionsRes.EnterTime).Format("Y-m-d"),
-		ClientIp:     g.RequestFromCtx(ctx).GetClientIp(),
-		RemoteIp:     g.RequestFromCtx(ctx).GetRemoteIp(),
-		LocalIp:      util.GetLocalIp(),
-		Status:       1,
-		Host:         g.RequestFromCtx(ctx).GetHost(),
+		TraceId:          gctx.CtxId(ctx),
+		UserId:           service.Session().GetUserId(ctx),
+		AppId:            service.Session().GetAppId(ctx),
+		IsSmartMatch:     isSmartMatch,
+		Stream:           completionsReq.Stream,
+		PromptTokens:     completionsRes.Usage.PromptTokens,
+		CompletionTokens: completionsRes.Usage.CompletionTokens,
+		TotalTokens:      completionsRes.Usage.TotalTokens,
+		ConnTime:         completionsRes.ConnTime,
+		Duration:         completionsRes.Duration,
+		TotalTime:        completionsRes.TotalTime,
+		InternalTime:     completionsRes.InternalTime,
+		ReqTime:          completionsRes.EnterTime,
+		ReqDate:          gtime.NewFromTimeStamp(completionsRes.EnterTime).Format("Y-m-d"),
+		ClientIp:         g.RequestFromCtx(ctx).GetClientIp(),
+		RemoteIp:         g.RequestFromCtx(ctx).GetRemoteIp(),
+		LocalIp:          util.GetLocalIp(),
+		Status:           1,
+		Host:             g.RequestFromCtx(ctx).GetHost(),
+		Rid:              service.Session().GetRid(ctx),
 	}
 
-	if len(completionsReq.Messages) > 0 && slices.Contains(config.Cfg.Log.Records, "prompt") {
+	if group != nil {
+		chat.GroupId = group.Id
+		chat.GroupName = group.Name
+		chat.Discount = group.Discount
+	}
+
+	if config.Cfg.Log.Open && len(completionsReq.Messages) > 0 && slices.Contains(config.Cfg.Log.ChatRecords, "prompt") {
 		chat.Prompt = gconv.String(completionsReq.Messages[len(completionsReq.Messages)-1].Content)
 	}
 
-	if slices.Contains(config.Cfg.Log.Records, "completion") {
+	if config.Cfg.Log.Open && slices.Contains(config.Cfg.Log.ChatRecords, "completion") {
 		chat.Completion = completionsRes.Completion
 	}
 
@@ -478,7 +497,6 @@ func (s *sRealtime) SaveLog(ctx context.Context, reqModel, realModel *model.Mode
 	}
 
 	if realModel != nil {
-
 		chat.IsEnablePresetConfig = realModel.IsEnablePresetConfig
 		chat.PresetConfig = realModel.PresetConfig
 		chat.IsEnableForward = realModel.IsEnableForward
@@ -487,24 +505,20 @@ func (s *sRealtime) SaveLog(ctx context.Context, reqModel, realModel *model.Mode
 		chat.RealModelId = realModel.Id
 		chat.RealModelName = realModel.Name
 		chat.RealModel = realModel.Model
-
-		if chat.IsEnableModelAgent && realModel.ModelAgent != nil {
-			chat.ModelAgentId = realModel.ModelAgent.Id
-			chat.ModelAgent = &do.ModelAgent{
-				Corp:    realModel.ModelAgent.Corp,
-				Name:    realModel.ModelAgent.Name,
-				BaseUrl: realModel.ModelAgent.BaseUrl,
-				Path:    realModel.ModelAgent.Path,
-				Weight:  realModel.ModelAgent.Weight,
-				Remark:  realModel.ModelAgent.Remark,
-				Status:  realModel.ModelAgent.Status,
-			}
-		}
 	}
 
-	chat.PromptTokens = completionsRes.Usage.PromptTokens
-	chat.CompletionTokens = completionsRes.Usage.CompletionTokens
-	chat.TotalTokens = completionsRes.Usage.TotalTokens
+	if chat.IsEnableModelAgent && modelAgent != nil {
+		chat.ModelAgentId = modelAgent.Id
+		chat.ModelAgent = &do.ModelAgent{
+			Corp:    modelAgent.Corp,
+			Name:    modelAgent.Name,
+			BaseUrl: modelAgent.BaseUrl,
+			Path:    modelAgent.Path,
+			Weight:  modelAgent.Weight,
+			Remark:  modelAgent.Remark,
+			Status:  modelAgent.Status,
+		}
+	}
 
 	if fallbackModelAgent != nil {
 		chat.IsEnableFallback = true
@@ -528,7 +542,13 @@ func (s *sRealtime) SaveLog(ctx context.Context, reqModel, realModel *model.Mode
 	}
 
 	if completionsRes.Error != nil {
+
 		chat.ErrMsg = completionsRes.Error.Error()
+		openaiApiError := &openai.APIError{}
+		if errors.As(completionsRes.Error, &openaiApiError) {
+			chat.ErrMsg = openaiApiError.Message
+		}
+
 		if common.IsAborted(completionsRes.Error) {
 			chat.Status = 2
 		} else {
@@ -536,7 +556,7 @@ func (s *sRealtime) SaveLog(ctx context.Context, reqModel, realModel *model.Mode
 		}
 	}
 
-	if slices.Contains(config.Cfg.Log.Records, "messages") {
+	if config.Cfg.Log.Open && slices.Contains(config.Cfg.Log.ChatRecords, "messages") {
 		for _, message := range completionsReq.Messages {
 			chat.Messages = append(chat.Messages, mcommon.Message{
 				Role:    message.Role,
@@ -561,7 +581,14 @@ func (s *sRealtime) SaveLog(ctx context.Context, reqModel, realModel *model.Mode
 	}
 
 	if _, err := dao.Chat.Insert(ctx, chat); err != nil {
-		logger.Error(ctx, err)
+		logger.Errorf(ctx, "sRealtime SaveLog error: %v", err)
+
+		if err.Error() == "an inserted document is too large" {
+			completionsReq.Messages = []sdkm.ChatCompletionMessage{{
+				Role:    consts.ROLE_SYSTEM,
+				Content: err.Error(),
+			}}
+		}
 
 		if len(retry) == 10 {
 			panic(err)
@@ -573,6 +600,6 @@ func (s *sRealtime) SaveLog(ctx context.Context, reqModel, realModel *model.Mode
 
 		logger.Errorf(ctx, "sRealtime SaveLog retry: %d", len(retry))
 
-		s.SaveLog(ctx, reqModel, realModel, fallbackModelAgent, fallbackModel, key, completionsReq, completionsRes, retryInfo, isSmartMatch, retry...)
+		s.SaveLog(ctx, group, reqModel, realModel, modelAgent, fallbackModelAgent, fallbackModel, key, completionsReq, completionsRes, retryInfo, isSmartMatch, retry...)
 	}
 }

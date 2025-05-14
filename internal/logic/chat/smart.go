@@ -106,8 +106,6 @@ func (s *sChat) SmartCompletions(ctx context.Context, params sdkm.ChatCompletion
 		if mak.RealModel != nil {
 			if err := grpool.Add(gctx.NeverDone(ctx), func(ctx context.Context) {
 
-				mak.RealModel.ModelAgent = mak.ModelAgent
-
 				completionsRes := &model.CompletionsRes{
 					Error:        err,
 					ConnTime:     response.ConnTime,
@@ -126,7 +124,8 @@ func (s *sChat) SmartCompletions(ctx context.Context, params sdkm.ChatCompletion
 					completionsRes.Completion = gconv.String(response.Choices[0].Message.Content)
 				}
 
-				s.SaveLog(ctx, reqModel, mak.RealModel, fallbackModelAgent, fallbackModel, mak.Key, &params, completionsRes, retryInfo, true)
+				s.SaveLog(ctx, mak.Group, reqModel, mak.RealModel, mak.ModelAgent, fallbackModelAgent, fallbackModel, mak.Key, &params, completionsRes, retryInfo, true)
+
 			}); err != nil {
 				logger.Error(ctx, err)
 			}
@@ -164,6 +163,16 @@ func (s *sChat) SmartCompletions(ctx context.Context, params sdkm.ChatCompletion
 				params.MaxTokens = mak.RealModel.PresetConfig.MinTokens
 			} else if mak.RealModel.PresetConfig.MaxTokens != 0 && params.MaxTokens > mak.RealModel.PresetConfig.MaxTokens {
 				params.MaxTokens = mak.RealModel.PresetConfig.MaxTokens
+			}
+		}
+	}
+
+	if mak.ModelAgent != nil && mak.ModelAgent.IsEnableModelReplace {
+		for i, replaceModel := range mak.ModelAgent.ReplaceModels {
+			if replaceModel == params.Model {
+				logger.Infof(ctx, "sChat SmartCompletions params.Model: %s replaced %s", params.Model, mak.ModelAgent.TargetModels[i])
+				params.Model = mak.ModelAgent.TargetModels[i]
+				break
 			}
 		}
 	}

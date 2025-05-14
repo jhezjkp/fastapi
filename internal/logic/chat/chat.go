@@ -3,6 +3,7 @@ package chat
 import (
 	"context"
 	"fmt"
+	"github.com/gogf/gf/v2/container/gmap"
 	"github.com/gogf/gf/v2/encoding/gjson"
 	"github.com/gogf/gf/v2/frame/g"
 	"github.com/gogf/gf/v2/os/gctx"
@@ -23,17 +24,15 @@ import (
 	"github.com/iimeta/fastapi/internal/service"
 	"github.com/iimeta/fastapi/utility/logger"
 	"github.com/iimeta/fastapi/utility/util"
+	"github.com/iimeta/go-openai"
 	"github.com/iimeta/tiktoken-go"
 	"io"
 	"math"
 	"slices"
-	"sync"
 	"time"
 )
 
-type sChat struct {
-	mutex sync.Mutex
-}
+type sChat struct{}
 
 func init() {
 	service.RegisterChat(New())
@@ -81,7 +80,10 @@ func (s *sChat) Completions(ctx context.Context, params sdkm.ChatCompletionReque
 		if retryInfo == nil && (err == nil || common.IsAborted(err)) && mak.ReqModel != nil {
 
 			// 替换成调用的模型
-			response.Model = mak.ReqModel.Model
+			if mak.ReqModel.IsEnableForward {
+				response.Model = mak.ReqModel.Model
+			}
+
 			model := mak.ReqModel.Model
 
 			if !tiktoken.IsEncodingForModel(model) {
@@ -90,7 +92,7 @@ func (s *sChat) Completions(ctx context.Context, params sdkm.ChatCompletionReque
 
 			if mak.ReqModel.Type == 100 { // 多模态
 
-				if response.Usage == nil {
+				if response.Usage == nil || mak.ReqModel.MultimodalQuota.BillingRule == 2 {
 
 					response.Usage = new(sdkm.Usage)
 
@@ -121,6 +123,12 @@ func (s *sChat) Completions(ctx context.Context, params sdkm.ChatCompletionReque
 						totalTokens += mak.ReqModel.MultimodalQuota.SearchQuota
 						response.Usage.SearchTokens = mak.ReqModel.MultimodalQuota.SearchQuota
 					}
+				}
+
+				if params.WebSearchOptions != nil {
+					searchTokens := common.GetMultimodalSearchTokens(ctx, params.WebSearchOptions, mak.ReqModel)
+					totalTokens += searchTokens
+					response.Usage.SearchTokens = searchTokens
 				}
 
 				if response.Usage.CacheCreationInputTokens != 0 {
@@ -195,8 +203,14 @@ func (s *sChat) Completions(ctx context.Context, params sdkm.ChatCompletionReque
 		}
 
 		if retryInfo == nil && (err == nil || common.IsAborted(err)) && mak.ReqModel != nil {
+
+			// 分组折扣
+			if mak.Group != nil && slices.Contains(mak.Group.Models, mak.ReqModel.Id) {
+				totalTokens = int(math.Ceil(float64(totalTokens) * mak.Group.Discount))
+			}
+
 			if err := grpool.Add(gctx.NeverDone(ctx), func(ctx context.Context) {
-				if err := service.Common().RecordUsage(ctx, totalTokens, mak.Key.Key); err != nil {
+				if err := service.Common().RecordUsage(ctx, totalTokens, mak.Key.Key, mak.Group); err != nil {
 					logger.Error(ctx, err)
 					panic(err)
 				}
@@ -207,8 +221,6 @@ func (s *sChat) Completions(ctx context.Context, params sdkm.ChatCompletionReque
 
 		if mak.ReqModel != nil && mak.RealModel != nil {
 			if err := grpool.Add(gctx.NeverDone(ctx), func(ctx context.Context) {
-
-				mak.RealModel.ModelAgent = mak.ModelAgent
 
 				completionsRes := &model.CompletionsRes{
 					Error:        err,
@@ -230,15 +242,31 @@ func (s *sChat) Completions(ctx context.Context, params sdkm.ChatCompletionReque
 					} else {
 						if len(response.Choices) > 1 {
 							for i, choice := range response.Choices {
-								completionsRes.Completion += fmt.Sprintf("index: %d\ncontent: %s\n\n", i, gconv.String(choice.Message.Content))
+
+								if choice.Message.Content != nil {
+									completionsRes.Completion += fmt.Sprintf("index: %d\ncontent: %s\n\n", i, gconv.String(choice.Message.Content))
+								}
+
+								if len(choice.Message.ToolCalls) > 0 {
+									completionsRes.Completion += fmt.Sprintf("index: %d\ntool_calls: %s\n\n", i, gconv.String(choice.Message.ToolCalls))
+								}
 							}
 						} else {
-							completionsRes.Completion = gconv.String(response.Choices[0].Message.Content)
+
+							if response.Choices[0].Message.ReasoningContent != nil {
+								completionsRes.Completion = gconv.String(response.Choices[0].Message.ReasoningContent)
+							}
+
+							completionsRes.Completion += gconv.String(response.Choices[0].Message.Content)
+
+							if len(response.Choices[0].Message.ToolCalls) > 0 {
+								completionsRes.Completion += fmt.Sprintf("\ntool_calls: %s", gconv.String(response.Choices[0].Message.ToolCalls))
+							}
 						}
 					}
 				}
 
-				s.SaveLog(ctx, mak.ReqModel, mak.RealModel, fallbackModelAgent, fallbackModel, mak.Key, &params, completionsRes, retryInfo, false)
+				s.SaveLog(ctx, mak.Group, mak.ReqModel, mak.RealModel, mak.ModelAgent, fallbackModelAgent, fallbackModel, mak.Key, &params, completionsRes, retryInfo, false)
 
 			}); err != nil {
 				logger.Error(ctx, err)
@@ -281,6 +309,17 @@ func (s *sChat) Completions(ctx context.Context, params sdkm.ChatCompletionReque
 				request.MaxTokens = mak.RealModel.PresetConfig.MinTokens
 			} else if mak.RealModel.PresetConfig.MaxTokens != 0 && request.MaxTokens > mak.RealModel.PresetConfig.MaxTokens {
 				request.MaxTokens = mak.RealModel.PresetConfig.MaxTokens
+			}
+		}
+	}
+
+	if mak.ModelAgent != nil && mak.ModelAgent.IsEnableModelReplace {
+		for i, replaceModel := range mak.ModelAgent.ReplaceModels {
+			if replaceModel == request.Model {
+				logger.Infof(ctx, "sChat Completions request.Model: %s replaced %s", request.Model, mak.ModelAgent.TargetModels[i])
+				request.Model = mak.ModelAgent.TargetModels[i]
+				mak.RealModel.Model = request.Model
+				break
 			}
 		}
 	}
@@ -399,7 +438,7 @@ func (s *sChat) CompletionsStream(ctx context.Context, params sdkm.ChatCompletio
 		internalTime := gtime.TimestampMilli() - enterTime - totalTime
 
 		if err := grpool.Add(gctx.NeverDone(ctx), func(ctx context.Context) {
-			if retryInfo == nil && completion != "" && (usage == nil || usage.PromptTokens == 0 || usage.CompletionTokens == 0) && mak.ReqModel != nil {
+			if retryInfo == nil && completion != "" && mak.ReqModel != nil && (usage == nil || usage.PromptTokens == 0 || usage.CompletionTokens == 0 || (mak.ReqModel.Type == 100 && mak.ReqModel.MultimodalQuota.BillingRule == 2)) {
 
 				if usage == nil {
 					usage = new(sdkm.Usage)
@@ -443,6 +482,12 @@ func (s *sChat) CompletionsStream(ctx context.Context, params sdkm.ChatCompletio
 						}
 					}
 
+					if params.WebSearchOptions != nil {
+						searchTokens := common.GetMultimodalSearchTokens(ctx, params.WebSearchOptions, mak.ReqModel)
+						totalTokens += searchTokens
+						usage.SearchTokens = searchTokens
+					}
+
 					if usage.CacheCreationInputTokens != 0 {
 						totalTokens += int(math.Ceil(float64(usage.CacheCreationInputTokens) * mak.ReqModel.MultimodalQuota.TextQuota.PromptRatio * 1.25))
 					}
@@ -477,6 +522,12 @@ func (s *sChat) CompletionsStream(ctx context.Context, params sdkm.ChatCompletio
 						}
 					}
 
+					if params.WebSearchOptions != nil {
+						searchTokens := common.GetMultimodalSearchTokens(ctx, params.WebSearchOptions, mak.ReqModel)
+						totalTokens += searchTokens
+						usage.SearchTokens = searchTokens
+					}
+
 					if usage.CacheCreationInputTokens != 0 {
 						totalTokens += int(math.Ceil(float64(usage.CacheCreationInputTokens) * mak.ReqModel.MultimodalQuota.TextQuota.PromptRatio * 1.25))
 					}
@@ -500,8 +551,14 @@ func (s *sChat) CompletionsStream(ctx context.Context, params sdkm.ChatCompletio
 			}
 
 			if retryInfo == nil && (err == nil || common.IsAborted(err)) && mak.ReqModel != nil {
+
+				// 分组折扣
+				if mak.Group != nil && slices.Contains(mak.Group.Models, mak.ReqModel.Id) {
+					totalTokens = int(math.Ceil(float64(totalTokens) * mak.Group.Discount))
+				}
+
 				if err := grpool.Add(ctx, func(ctx context.Context) {
-					if err := service.Common().RecordUsage(ctx, totalTokens, mak.Key.Key); err != nil {
+					if err := service.Common().RecordUsage(ctx, totalTokens, mak.Key.Key, mak.Group); err != nil {
 						logger.Error(ctx, err)
 						panic(err)
 					}
@@ -512,8 +569,6 @@ func (s *sChat) CompletionsStream(ctx context.Context, params sdkm.ChatCompletio
 
 			if mak.ReqModel != nil && mak.RealModel != nil {
 				if err := grpool.Add(ctx, func(ctx context.Context) {
-
-					mak.RealModel.ModelAgent = mak.ModelAgent
 
 					completionsRes := &model.CompletionsRes{
 						Completion:   completion,
@@ -530,7 +585,7 @@ func (s *sChat) CompletionsStream(ctx context.Context, params sdkm.ChatCompletio
 						completionsRes.Usage.TotalTokens = totalTokens
 					}
 
-					s.SaveLog(ctx, mak.ReqModel, mak.RealModel, fallbackModelAgent, fallbackModel, mak.Key, &params, completionsRes, retryInfo, false)
+					s.SaveLog(ctx, mak.Group, mak.ReqModel, mak.RealModel, mak.ModelAgent, fallbackModelAgent, fallbackModel, mak.Key, &params, completionsRes, retryInfo, false)
 
 				}); err != nil {
 					logger.Error(ctx, err)
@@ -578,6 +633,17 @@ func (s *sChat) CompletionsStream(ctx context.Context, params sdkm.ChatCompletio
 				request.MaxTokens = mak.RealModel.PresetConfig.MinTokens
 			} else if mak.RealModel.PresetConfig.MaxTokens != 0 && request.MaxTokens > mak.RealModel.PresetConfig.MaxTokens {
 				request.MaxTokens = mak.RealModel.PresetConfig.MaxTokens
+			}
+		}
+	}
+
+	if mak.ModelAgent != nil && mak.ModelAgent.IsEnableModelReplace {
+		for i, replaceModel := range mak.ModelAgent.ReplaceModels {
+			if replaceModel == request.Model {
+				logger.Infof(ctx, "sChat CompletionsStream request.Model: %s replaced %s", request.Model, mak.ModelAgent.TargetModels[i])
+				request.Model = mak.ModelAgent.TargetModels[i]
+				mak.RealModel.Model = request.Model
+				break
 			}
 		}
 	}
@@ -770,6 +836,9 @@ func (s *sChat) CompletionsStream(ctx context.Context, params sdkm.ChatCompletio
 						completion += fmt.Sprintf("index: %d\ncontent: %s\n\n", i, choice.Delta.Content)
 					}
 				} else {
+					if response.Choices[0].Delta.ReasoningContent != nil {
+						completion += gconv.String(response.Choices[0].Delta.ReasoningContent)
+					}
 					completion += response.Choices[0].Delta.Content
 				}
 			}
@@ -804,7 +873,9 @@ func (s *sChat) CompletionsStream(ctx context.Context, params sdkm.ChatCompletio
 		}
 
 		// 替换成调用的模型
-		response.Model = mak.ReqModel.Model
+		if mak.ReqModel.IsEnableForward {
+			response.Model = mak.ReqModel.Model
+		}
 
 		// OpenAI官方格式
 		if len(response.ResponseBytes) > 0 {
@@ -816,8 +887,10 @@ func (s *sChat) CompletionsStream(ctx context.Context, params sdkm.ChatCompletio
 			}
 
 			// 替换成调用的模型
-			if _, ok := data["model"]; ok {
-				data["model"] = mak.ReqModel.Model
+			if mak.ReqModel.IsEnableForward {
+				if _, ok := data["model"]; ok {
+					data["model"] = mak.ReqModel.Model
+				}
 			}
 
 			if err = util.SSEServer(ctx, gjson.MustEncodeString(data)); err != nil {
@@ -835,12 +908,7 @@ func (s *sChat) CompletionsStream(ctx context.Context, params sdkm.ChatCompletio
 }
 
 // 保存日志
-func (s *sChat) SaveLog(ctx context.Context, reqModel, realModel *model.Model, fallbackModelAgent *model.ModelAgent, fallbackModel *model.Model, key *model.Key, completionsReq *sdkm.ChatCompletionRequest, completionsRes *model.CompletionsRes, retryInfo *mcommon.Retry, isSmartMatch bool, retry ...int) {
-
-	if len(retry) == 0 {
-		s.mutex.Lock()
-		defer s.mutex.Unlock()
-	}
+func (s *sChat) SaveLog(ctx context.Context, group *model.Group, reqModel, realModel *model.Model, modelAgent, fallbackModelAgent *model.ModelAgent, fallbackModel *model.Model, key *model.Key, completionsReq *sdkm.ChatCompletionRequest, completionsRes *model.CompletionsRes, retryInfo *mcommon.Retry, isSmartMatch bool, retry ...int) {
 
 	now := gtime.TimestampMilli()
 	defer func() {
@@ -848,30 +916,48 @@ func (s *sChat) SaveLog(ctx context.Context, reqModel, realModel *model.Model, f
 	}()
 
 	// 不记录此错误日志
-	if completionsRes.Error != nil && (errors.Is(completionsRes.Error, errors.ERR_MODEL_NOT_FOUND) || errors.Is(completionsRes.Error, errors.ERR_MODEL_DISABLED)) {
+	if completionsRes.Error != nil && (errors.Is(completionsRes.Error, errors.ERR_MODEL_NOT_FOUND) ||
+		errors.Is(completionsRes.Error, errors.ERR_MODEL_DISABLED) ||
+		errors.Is(completionsRes.Error, errors.ERR_GROUP_NOT_FOUND) ||
+		errors.Is(completionsRes.Error, errors.ERR_GROUP_DISABLED) ||
+		errors.Is(completionsRes.Error, errors.ERR_GROUP_EXPIRED) ||
+		errors.Is(completionsRes.Error, errors.ERR_GROUP_INSUFFICIENT_QUOTA)) {
 		return
 	}
 
 	chat := do.Chat{
-		TraceId:      gctx.CtxId(ctx),
-		UserId:       service.Session().GetUserId(ctx),
-		AppId:        service.Session().GetAppId(ctx),
-		IsSmartMatch: isSmartMatch,
-		Stream:       completionsReq.Stream,
-		ConnTime:     completionsRes.ConnTime,
-		Duration:     completionsRes.Duration,
-		TotalTime:    completionsRes.TotalTime,
-		InternalTime: completionsRes.InternalTime,
-		ReqTime:      completionsRes.EnterTime,
-		ReqDate:      gtime.NewFromTimeStamp(completionsRes.EnterTime).Format("Y-m-d"),
-		ClientIp:     g.RequestFromCtx(ctx).GetClientIp(),
-		RemoteIp:     g.RequestFromCtx(ctx).GetRemoteIp(),
-		LocalIp:      util.GetLocalIp(),
-		Status:       1,
-		Host:         g.RequestFromCtx(ctx).GetHost(),
+		TraceId:          gctx.CtxId(ctx),
+		UserId:           service.Session().GetUserId(ctx),
+		AppId:            service.Session().GetAppId(ctx),
+		IsSmartMatch:     isSmartMatch,
+		Stream:           completionsReq.Stream,
+		PromptTokens:     completionsRes.Usage.PromptTokens,
+		CompletionTokens: completionsRes.Usage.CompletionTokens,
+		TotalTokens:      completionsRes.Usage.TotalTokens,
+		SearchTokens:     completionsRes.Usage.SearchTokens,
+		CacheWriteTokens: completionsRes.Usage.CacheCreationInputTokens,
+		CacheHitTokens:   completionsRes.Usage.CacheReadInputTokens,
+		ConnTime:         completionsRes.ConnTime,
+		Duration:         completionsRes.Duration,
+		TotalTime:        completionsRes.TotalTime,
+		InternalTime:     completionsRes.InternalTime,
+		ReqTime:          completionsRes.EnterTime,
+		ReqDate:          gtime.NewFromTimeStamp(completionsRes.EnterTime).Format("Y-m-d"),
+		ClientIp:         g.RequestFromCtx(ctx).GetClientIp(),
+		RemoteIp:         g.RequestFromCtx(ctx).GetRemoteIp(),
+		LocalIp:          util.GetLocalIp(),
+		Status:           1,
+		Host:             g.RequestFromCtx(ctx).GetHost(),
+		Rid:              service.Session().GetRid(ctx),
 	}
 
-	if len(completionsReq.Messages) > 0 && slices.Contains(config.Cfg.Log.Records, "prompt") {
+	if group != nil {
+		chat.GroupId = group.Id
+		chat.GroupName = group.Name
+		chat.Discount = group.Discount
+	}
+
+	if config.Cfg.Log.Open && len(completionsReq.Messages) > 0 && slices.Contains(config.Cfg.Log.ChatRecords, "prompt") {
 
 		prompt := completionsReq.Messages[len(completionsReq.Messages)-1].Content
 
@@ -891,19 +977,28 @@ func (s *sChat) SaveLog(ctx context.Context, reqModel, realModel *model.Model, f
 
 		} else {
 
-			if slices.Contains(config.Cfg.Log.Records, "image") {
+			if slices.Contains(config.Cfg.Log.ChatRecords, "image") {
 				chat.Prompt = gconv.String(prompt)
 			} else {
 				if multiContent, ok := prompt.([]interface{}); ok {
+
+					multiContents := make([]interface{}, 0)
 
 					for _, value := range multiContent {
 
 						if content, ok := value.(map[string]interface{}); ok {
 
 							if content["type"] == "image_url" {
+
 								if imageUrl, ok := content["image_url"].(map[string]interface{}); ok {
+
 									if !gstr.HasPrefix(gconv.String(imageUrl["url"]), "http") {
+
+										imageUrl = gmap.NewStrAnyMapFrom(imageUrl).MapCopy()
 										imageUrl["url"] = "[BASE64图像数据]"
+
+										content = gmap.NewStrAnyMapFrom(content).MapCopy()
+										content["image_url"] = imageUrl
 									}
 								}
 							}
@@ -911,13 +1006,18 @@ func (s *sChat) SaveLog(ctx context.Context, reqModel, realModel *model.Model, f
 							if content["type"] == "image" {
 								if source, ok := content["source"].(sdkm.Source); ok {
 									source.Data = "[BASE64图像数据]"
+									content = gmap.NewStrAnyMapFrom(content).MapCopy()
 									content["source"] = source
 								}
 							}
+
+							value = content
 						}
+
+						multiContents = append(multiContents, value)
 					}
 
-					chat.Prompt = gconv.String(multiContent)
+					chat.Prompt = gconv.String(multiContents)
 
 				} else {
 					chat.Prompt = gconv.String(prompt)
@@ -926,7 +1026,7 @@ func (s *sChat) SaveLog(ctx context.Context, reqModel, realModel *model.Model, f
 		}
 	}
 
-	if slices.Contains(config.Cfg.Log.Records, "completion") {
+	if config.Cfg.Log.Open && slices.Contains(config.Cfg.Log.ChatRecords, "completion") {
 		chat.Completion = completionsRes.Completion
 	}
 
@@ -948,7 +1048,6 @@ func (s *sChat) SaveLog(ctx context.Context, reqModel, realModel *model.Model, f
 	}
 
 	if realModel != nil {
-
 		chat.IsEnablePresetConfig = realModel.IsEnablePresetConfig
 		chat.PresetConfig = realModel.PresetConfig
 		chat.IsEnableForward = realModel.IsEnableForward
@@ -957,27 +1056,20 @@ func (s *sChat) SaveLog(ctx context.Context, reqModel, realModel *model.Model, f
 		chat.RealModelId = realModel.Id
 		chat.RealModelName = realModel.Name
 		chat.RealModel = realModel.Model
-
-		if chat.IsEnableModelAgent && realModel.ModelAgent != nil {
-			chat.ModelAgentId = realModel.ModelAgent.Id
-			chat.ModelAgent = &do.ModelAgent{
-				Corp:    realModel.ModelAgent.Corp,
-				Name:    realModel.ModelAgent.Name,
-				BaseUrl: realModel.ModelAgent.BaseUrl,
-				Path:    realModel.ModelAgent.Path,
-				Weight:  realModel.ModelAgent.Weight,
-				Remark:  realModel.ModelAgent.Remark,
-				Status:  realModel.ModelAgent.Status,
-			}
-		}
 	}
 
-	chat.PromptTokens = completionsRes.Usage.PromptTokens
-	chat.CompletionTokens = completionsRes.Usage.CompletionTokens
-	chat.TotalTokens = completionsRes.Usage.TotalTokens
-	chat.SearchTokens = completionsRes.Usage.SearchTokens
-	chat.CacheWriteTokens = completionsRes.Usage.CacheCreationInputTokens
-	chat.CacheHitTokens = completionsRes.Usage.CacheReadInputTokens
+	if chat.IsEnableModelAgent && modelAgent != nil {
+		chat.ModelAgentId = modelAgent.Id
+		chat.ModelAgent = &do.ModelAgent{
+			Corp:    modelAgent.Corp,
+			Name:    modelAgent.Name,
+			BaseUrl: modelAgent.BaseUrl,
+			Path:    modelAgent.Path,
+			Weight:  modelAgent.Weight,
+			Remark:  modelAgent.Remark,
+			Status:  modelAgent.Status,
+		}
+	}
 
 	if fallbackModelAgent != nil {
 		chat.IsEnableFallback = true
@@ -1001,7 +1093,13 @@ func (s *sChat) SaveLog(ctx context.Context, reqModel, realModel *model.Model, f
 	}
 
 	if completionsRes.Error != nil {
+
 		chat.ErrMsg = completionsRes.Error.Error()
+		openaiApiError := &openai.APIError{}
+		if errors.As(completionsRes.Error, &openaiApiError) {
+			chat.ErrMsg = openaiApiError.Message
+		}
+
 		if common.IsAborted(completionsRes.Error) {
 			chat.Status = 2
 		} else {
@@ -1009,23 +1107,32 @@ func (s *sChat) SaveLog(ctx context.Context, reqModel, realModel *model.Model, f
 		}
 	}
 
-	if slices.Contains(config.Cfg.Log.Records, "messages") {
+	if config.Cfg.Log.Open && slices.Contains(config.Cfg.Log.ChatRecords, "messages") {
 		for _, message := range completionsReq.Messages {
 
 			content := message.Content
 
-			if !slices.Contains(config.Cfg.Log.Records, "image") {
+			if !slices.Contains(config.Cfg.Log.ChatRecords, "image") {
 
 				if multiContent, ok := content.([]interface{}); ok {
+
+					multiContents := make([]interface{}, 0)
 
 					for _, value := range multiContent {
 
 						if content, ok := value.(map[string]interface{}); ok {
 
 							if content["type"] == "image_url" {
+
 								if imageUrl, ok := content["image_url"].(map[string]interface{}); ok {
+
 									if !gstr.HasPrefix(gconv.String(imageUrl["url"]), "http") {
+
+										imageUrl = gmap.NewStrAnyMapFrom(imageUrl).MapCopy()
 										imageUrl["url"] = "[BASE64图像数据]"
+
+										content = gmap.NewStrAnyMapFrom(content).MapCopy()
+										content["image_url"] = imageUrl
 									}
 								}
 							}
@@ -1033,19 +1140,30 @@ func (s *sChat) SaveLog(ctx context.Context, reqModel, realModel *model.Model, f
 							if content["type"] == "image" {
 								if source, ok := content["source"].(sdkm.Source); ok {
 									source.Data = "[BASE64图像数据]"
+									content = gmap.NewStrAnyMapFrom(content).MapCopy()
 									content["source"] = source
 								}
 							}
+
+							value = content
 						}
+
+						multiContents = append(multiContents, value)
 					}
 
-					content = gconv.String(multiContent)
+					content = gconv.String(multiContents)
 				}
 			}
 
 			chat.Messages = append(chat.Messages, mcommon.Message{
-				Role:    message.Role,
-				Content: gconv.String(content),
+				Role:         message.Role,
+				Content:      gconv.String(content),
+				Refusal:      message.Refusal,
+				Name:         message.Name,
+				FunctionCall: message.FunctionCall,
+				ToolCalls:    message.ToolCalls,
+				ToolCallId:   message.ToolCallID,
+				Audio:        message.Audio,
 			})
 		}
 	}
@@ -1066,7 +1184,14 @@ func (s *sChat) SaveLog(ctx context.Context, reqModel, realModel *model.Model, f
 	}
 
 	if _, err := dao.Chat.Insert(ctx, chat); err != nil {
-		logger.Error(ctx, err)
+		logger.Errorf(ctx, "sChat SaveLog error: %v", err)
+
+		if err.Error() == "an inserted document is too large" {
+			completionsReq.Messages = []sdkm.ChatCompletionMessage{{
+				Role:    consts.ROLE_SYSTEM,
+				Content: err.Error(),
+			}}
+		}
 
 		if len(retry) == 10 {
 			panic(err)
@@ -1078,6 +1203,6 @@ func (s *sChat) SaveLog(ctx context.Context, reqModel, realModel *model.Model, f
 
 		logger.Errorf(ctx, "sChat SaveLog retry: %d", len(retry))
 
-		s.SaveLog(ctx, reqModel, realModel, fallbackModelAgent, fallbackModel, key, completionsReq, completionsRes, retryInfo, isSmartMatch, retry...)
+		s.SaveLog(ctx, group, reqModel, realModel, modelAgent, fallbackModelAgent, fallbackModel, key, completionsReq, completionsRes, retryInfo, isSmartMatch, retry...)
 	}
 }

@@ -54,20 +54,20 @@ func GetMultimodalTokens(ctx context.Context, model string, multiContent []inter
 
 				detail := imageUrl["detail"]
 
-				var imageQuota mcommon.ImageQuota
-				for _, quota := range reqModel.MultimodalQuota.ImageQuotas {
+				var visionQuota mcommon.VisionQuota
+				for _, quota := range reqModel.MultimodalQuota.VisionQuotas {
 
 					if quota.Mode == detail {
-						imageQuota = quota
+						visionQuota = quota
 						break
 					}
 
 					if quota.IsDefault {
-						imageQuota = quota
+						visionQuota = quota
 					}
 				}
 
-				imageTokens += imageQuota.FixedQuota
+				imageTokens += visionQuota.FixedQuota
 			}
 
 		} else {
@@ -120,4 +120,26 @@ func GetMultimodalAudioTokens(ctx context.Context, model string, messages []sdkm
 	logger.Debugf(ctx, "GetMultimodalAudioTokens NumTokensFromString model: %s, len(content): %d, tokens: %d, time: %d", model, len(text), tokens, gtime.TimestampMilli()-contentTime)
 
 	return textTokens, 288
+}
+
+func GetMultimodalSearchTokens(ctx context.Context, webSearchOptions any, reqModel *model.Model) (searchTokens int) {
+
+	var searchContextSize string
+	if content, ok := webSearchOptions.(map[string]interface{}); ok {
+		searchContextSize = gconv.String(content["search_context_size"])
+	}
+
+	for _, size := range reqModel.MultimodalQuota.SearchQuotas {
+
+		if size.SearchContextSize == searchContextSize {
+			searchTokens = size.FixedQuota
+			break
+		}
+
+		if size.IsDefault {
+			searchTokens = size.FixedQuota
+		}
+	}
+
+	return searchTokens
 }

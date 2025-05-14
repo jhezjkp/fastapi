@@ -2,7 +2,6 @@ package user
 
 import (
 	"context"
-	"fmt"
 	"github.com/gogf/gf/v2/encoding/gjson"
 	"github.com/gogf/gf/v2/os/gtime"
 	"github.com/iimeta/fastapi/internal/consts"
@@ -13,7 +12,6 @@ import (
 	"github.com/iimeta/fastapi/internal/service"
 	"github.com/iimeta/fastapi/utility/cache"
 	"github.com/iimeta/fastapi/utility/logger"
-	"github.com/iimeta/fastapi/utility/redis"
 	"go.mongodb.org/mongo-driver/bson"
 )
 
@@ -58,7 +56,9 @@ func (s *sUser) GetUser(ctx context.Context, userId int) (*model.User, error) {
 		UsedQuota:      user.UsedQuota,
 		QuotaExpiresAt: user.QuotaExpiresAt,
 		Models:         user.Models,
+		Groups:         user.Groups,
 		Status:         user.Status,
+		Rid:            user.Rid,
 	}, nil
 }
 
@@ -91,7 +91,9 @@ func (s *sUser) List(ctx context.Context) ([]*model.User, error) {
 			UsedQuota:      result.UsedQuota,
 			QuotaExpiresAt: result.QuotaExpiresAt,
 			Models:         result.Models,
+			Groups:         result.Groups,
 			Status:         result.Status,
+			Rid:            result.Rid,
 		})
 	}
 
@@ -116,10 +118,6 @@ func (s *sUser) SpendQuota(ctx context.Context, userId, spendQuota, currentQuota
 		return err
 	}
 
-	if err := s.SaveCacheUserQuota(ctx, userId, currentQuota); err != nil {
-		logger.Error(ctx, err)
-	}
-
 	return nil
 }
 
@@ -133,11 +131,6 @@ func (s *sUser) SaveCacheUser(ctx context.Context, user *model.User) error {
 
 	if user == nil {
 		return errors.New("user is nil")
-	}
-
-	if _, err := redis.Set(ctx, fmt.Sprintf(consts.API_USER_KEY, user.UserId), user); err != nil {
-		logger.Error(ctx, err)
-		return err
 	}
 
 	service.Session().SaveUser(ctx, user)
@@ -173,30 +166,7 @@ func (s *sUser) GetCacheUser(ctx context.Context, userId int) (*model.User, erro
 		return user, nil
 	}
 
-	reply, err := redis.Get(ctx, fmt.Sprintf(consts.API_USER_KEY, userId))
-	if err != nil {
-		logger.Error(ctx, err)
-		return nil, err
-	}
-
-	if reply == nil || reply.IsNil() {
-		return nil, errors.New("user is nil")
-	}
-
-	user := new(model.User)
-	if err = reply.Struct(&user); err != nil {
-		logger.Error(ctx, err)
-		return nil, err
-	}
-
-	service.Session().SaveUser(ctx, user)
-
-	if err = s.userCache.Set(ctx, user.UserId, user, 0); err != nil {
-		logger.Error(ctx, err)
-		return nil, err
-	}
-
-	return user, nil
+	return nil, errors.New("user is nil")
 }
 
 // 更新缓存中的用户信息
@@ -218,7 +188,9 @@ func (s *sUser) UpdateCacheUser(ctx context.Context, user *entity.User) {
 		UsedQuota:      user.UsedQuota,
 		QuotaExpiresAt: user.QuotaExpiresAt,
 		Models:         user.Models,
+		Groups:         user.Groups,
 		Status:         user.Status,
+		Rid:            user.Rid,
 	}); err != nil {
 		logger.Error(ctx, err)
 	}
@@ -237,10 +209,6 @@ func (s *sUser) RemoveCacheUser(ctx context.Context, userId int) {
 	}
 
 	if _, err := s.userQuotaCache.Remove(ctx, userId); err != nil {
-		logger.Error(ctx, err)
-	}
-
-	if _, err := redis.Del(ctx, fmt.Sprintf(consts.API_USER_KEY, userId)); err != nil {
 		logger.Error(ctx, err)
 	}
 }
@@ -310,6 +278,18 @@ func (s *sUser) Subscribe(ctx context.Context, msg string) error {
 		}
 
 		s.RemoveCacheUser(ctx, user.UserId)
+
+	case consts.ACTION_CACHE:
+
+		var userQuota *model.UserQuota
+		if err := gjson.Unmarshal(gjson.MustEncode(message.NewData), &userQuota); err != nil {
+			logger.Error(ctx, err)
+			return err
+		}
+
+		if err := s.SaveCacheUserQuota(ctx, userQuota.UserId, userQuota.CurrentQuota); err != nil {
+			logger.Error(ctx, err)
+		}
 	}
 
 	return nil

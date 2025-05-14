@@ -1,11 +1,9 @@
 package key
 
 import (
-	"cmp"
 	"context"
 	"fmt"
 	"github.com/gogf/gf/v2/encoding/gjson"
-	"github.com/gogf/gf/v2/frame/g"
 	"github.com/gogf/gf/v2/os/gtime"
 	"github.com/iimeta/fastapi/internal/config"
 	"github.com/iimeta/fastapi/internal/consts"
@@ -62,12 +60,15 @@ func (s *sKey) GetKey(ctx context.Context, secretKey string) (*model.Key, error)
 		Weight:              key.Weight,
 		Models:              key.Models,
 		ModelAgents:         key.ModelAgents,
+		IsNeverDisable:      key.IsNeverDisable,
 		IsLimitQuota:        key.IsLimitQuota,
 		Quota:               key.Quota,
 		UsedQuota:           key.UsedQuota,
 		QuotaExpiresRule:    key.QuotaExpiresRule,
 		QuotaExpiresAt:      key.QuotaExpiresAt,
 		QuotaExpiresMinutes: key.QuotaExpiresMinutes,
+		IsBindGroup:         key.IsBindGroup,
+		Group:               key.Group,
 		IpWhitelist:         key.IpWhitelist,
 		IpBlacklist:         key.IpBlacklist,
 		Status:              key.Status,
@@ -100,12 +101,15 @@ func (s *sKey) GetModelKeys(ctx context.Context, id string) ([]*model.Key, error
 			Weight:              result.Weight,
 			Models:              result.Models,
 			ModelAgents:         result.ModelAgents,
+			IsNeverDisable:      result.IsNeverDisable,
 			IsLimitQuota:        result.IsLimitQuota,
 			Quota:               result.Quota,
 			UsedQuota:           result.UsedQuota,
 			QuotaExpiresRule:    result.QuotaExpiresRule,
 			QuotaExpiresAt:      result.QuotaExpiresAt,
 			QuotaExpiresMinutes: result.QuotaExpiresMinutes,
+			IsBindGroup:         result.IsBindGroup,
+			Group:               result.Group,
 			IpWhitelist:         result.IpWhitelist,
 			IpBlacklist:         result.IpBlacklist,
 			Status:              result.Status,
@@ -127,7 +131,7 @@ func (s *sKey) List(ctx context.Context, typ int) ([]*model.Key, error) {
 		"type": typ,
 	}
 
-	results, err := dao.Key.Find(ctx, filter, "status", "-updated_at")
+	results, err := dao.Key.Find(ctx, filter, &dao.FindOptions{SortFields: []string{"status", "-weight", "-updated_at"}})
 	if err != nil {
 		logger.Error(ctx, err)
 		return nil, err
@@ -145,15 +149,19 @@ func (s *sKey) List(ctx context.Context, typ int) ([]*model.Key, error) {
 			Weight:              result.Weight,
 			Models:              result.Models,
 			ModelAgents:         result.ModelAgents,
+			IsNeverDisable:      result.IsNeverDisable,
 			IsLimitQuota:        result.IsLimitQuota,
 			Quota:               result.Quota,
 			UsedQuota:           result.UsedQuota,
 			QuotaExpiresRule:    result.QuotaExpiresRule,
 			QuotaExpiresAt:      result.QuotaExpiresAt,
 			QuotaExpiresMinutes: result.QuotaExpiresMinutes,
+			IsBindGroup:         result.IsBindGroup,
+			Group:               result.Group,
 			IpWhitelist:         result.IpWhitelist,
 			IpBlacklist:         result.IpBlacklist,
 			Status:              result.Status,
+			Rid:                 result.Rid,
 		})
 	}
 
@@ -317,6 +325,11 @@ func (s *sKey) DisabledModelKey(ctx context.Context, key *model.Key, disabledRea
 		logger.Debugf(ctx, "sKey DisabledModelKey time: %d", gtime.TimestampMilli()-now)
 	}()
 
+	// 永不禁用
+	if key.IsNeverDisable {
+		return
+	}
+
 	s.UpdateCacheModelKey(ctx, nil, &entity.Key{
 		Id:                  key.Id,
 		UserId:              key.UserId,
@@ -327,12 +340,15 @@ func (s *sKey) DisabledModelKey(ctx context.Context, key *model.Key, disabledRea
 		Weight:              key.Weight,
 		Models:              key.Models,
 		ModelAgents:         key.ModelAgents,
+		IsNeverDisable:      key.IsNeverDisable,
 		IsLimitQuota:        key.IsLimitQuota,
 		Quota:               key.Quota,
 		UsedQuota:           key.UsedQuota,
 		QuotaExpiresRule:    key.QuotaExpiresRule,
 		QuotaExpiresAt:      key.QuotaExpiresAt,
 		QuotaExpiresMinutes: key.QuotaExpiresMinutes,
+		IsBindGroup:         key.IsBindGroup,
+		Group:               key.Group,
 		IpWhitelist:         key.IpWhitelist,
 		IpBlacklist:         key.IpBlacklist,
 		Status:              2,
@@ -354,25 +370,12 @@ func (s *sKey) SaveCacheModelKeys(ctx context.Context, id string, keys []*model.
 
 	now := gtime.TimestampMilli()
 	defer func() {
-		logger.Debugf(ctx, "sKey SaveCacheModelKeys time: %d", gtime.TimestampMilli()-now)
+		logger.Debugf(ctx, "sKey SaveCacheModelKeys keys: %d, time: %d", len(keys), gtime.TimestampMilli()-now)
 	}()
 
-	fields := g.Map{}
-	for _, key := range keys {
-		fields[key.Id] = key
-	}
-
-	if len(fields) > 0 {
-
-		if _, err := redis.HSet(ctx, fmt.Sprintf(consts.API_MODEL_KEYS_KEY, id), fields); err != nil {
-			logger.Error(ctx, err)
-			return err
-		}
-
-		if err := s.modelKeysCache.Set(ctx, id, keys, 0); err != nil {
-			logger.Error(ctx, err)
-			return err
-		}
+	if err := s.modelKeysCache.Set(ctx, id, keys, 0); err != nil {
+		logger.Error(ctx, err)
+		return err
 	}
 
 	return nil
@@ -390,48 +393,7 @@ func (s *sKey) GetCacheModelKeys(ctx context.Context, id string) ([]*model.Key, 
 		return modelKeysCacheValue.([]*model.Key), nil
 	}
 
-	reply, err := redis.HVals(ctx, fmt.Sprintf(consts.API_MODEL_KEYS_KEY, id))
-	if err != nil {
-		logger.Error(ctx, err)
-		return nil, err
-	}
-
-	if reply == nil || len(reply) == 0 {
-		return nil, errors.New("modelKeys is nil")
-	}
-
-	items := make([]*model.Key, 0)
-	for _, str := range reply.Strings() {
-
-		if str == "" {
-			continue
-		}
-
-		result := new(model.Key)
-		if err = gjson.Unmarshal([]byte(str), &result); err != nil {
-			logger.Error(ctx, err)
-			return nil, err
-		}
-
-		if result.Status == 1 {
-			items = append(items, result)
-		}
-	}
-
-	if len(items) == 0 {
-		return nil, errors.New("modelKeys is nil")
-	}
-
-	slices.SortFunc(items, func(k1, k2 *model.Key) int {
-		return cmp.Compare(k1.Id, k2.Id)
-	})
-
-	if err = s.modelKeysCache.Set(ctx, id, items, 0); err != nil {
-		logger.Error(ctx, err)
-		return nil, err
-	}
-
-	return items, nil
+	return nil, errors.New("modelKeys is nil")
 }
 
 // 新增模型密钥到缓存列表中
@@ -452,12 +414,15 @@ func (s *sKey) CreateCacheModelKey(ctx context.Context, key *entity.Key) {
 		Weight:              key.Weight,
 		Models:              key.Models,
 		ModelAgents:         key.ModelAgents,
+		IsNeverDisable:      key.IsNeverDisable,
 		IsLimitQuota:        key.IsLimitQuota,
 		Quota:               key.Quota,
 		UsedQuota:           key.UsedQuota,
 		QuotaExpiresRule:    key.QuotaExpiresRule,
 		QuotaExpiresAt:      key.QuotaExpiresAt,
 		QuotaExpiresMinutes: key.QuotaExpiresMinutes,
+		IsBindGroup:         key.IsBindGroup,
+		Group:               key.Group,
 		IpWhitelist:         key.IpWhitelist,
 		IpBlacklist:         key.IpBlacklist,
 		Status:              key.Status,
@@ -495,12 +460,15 @@ func (s *sKey) UpdateCacheModelKey(ctx context.Context, oldData *entity.Key, new
 		Weight:              newData.Weight,
 		Models:              newData.Models,
 		ModelAgents:         newData.ModelAgents,
+		IsNeverDisable:      newData.IsNeverDisable,
 		IsLimitQuota:        newData.IsLimitQuota,
 		Quota:               newData.Quota,
 		UsedQuota:           newData.UsedQuota,
 		QuotaExpiresRule:    newData.QuotaExpiresRule,
 		QuotaExpiresAt:      newData.QuotaExpiresAt,
 		QuotaExpiresMinutes: newData.QuotaExpiresMinutes,
+		IsBindGroup:         newData.IsBindGroup,
+		Group:               newData.Group,
 		IpWhitelist:         newData.IpWhitelist,
 		IpBlacklist:         newData.IpBlacklist,
 		Status:              newData.Status,
@@ -517,11 +485,10 @@ func (s *sKey) UpdateCacheModelKey(ctx context.Context, oldData *entity.Key, new
 
 		modelKeys, err := s.GetCacheModelKeys(ctx, id)
 		if err != nil {
-			if modelKeys, err = s.GetModelKeys(ctx, id); err != nil {
-				logger.Error(ctx, err)
-				continue
-			}
-		} else if len(modelKeys) == 0 {
+			logger.Error(ctx, err)
+		}
+
+		if len(modelKeys) == 0 {
 			if modelKeys, err = s.GetModelKeys(ctx, id); err != nil {
 				logger.Error(ctx, err)
 				continue
@@ -574,24 +541,17 @@ func (s *sKey) UpdateCacheModelKey(ctx context.Context, oldData *entity.Key, new
 					}
 				}
 
-				if len(modelKeys) > 0 {
+				if len(modelKeys) > 0 && s.modelKeysCache.ContainsKey(ctx, id) {
 
 					newKeys := make([]*model.Key, 0)
 					for _, k := range modelKeys {
-
 						if k.Id != oldData.Id {
 							newKeys = append(newKeys, k)
-						} else {
-							if _, err = redis.HDel(ctx, fmt.Sprintf(consts.API_MODEL_KEYS_KEY, id), oldData.Id); err != nil {
-								logger.Error(ctx, err)
-							}
 						}
 					}
 
-					if s.modelKeysCache.ContainsKey(ctx, id) {
-						if err = s.modelKeysCache.Set(ctx, id, newKeys, 0); err != nil {
-							logger.Error(ctx, err)
-						}
+					if err = s.modelKeysCache.Set(ctx, id, newKeys, 0); err != nil {
+						logger.Error(ctx, err)
 					}
 				}
 			}
@@ -612,10 +572,6 @@ func (s *sKey) RemoveCacheModelKey(ctx context.Context, key *entity.Key) {
 	}()
 
 	for _, id := range key.Models {
-
-		if _, err := redis.HDel(ctx, fmt.Sprintf(consts.API_MODEL_KEYS_KEY, id), key.Id); err != nil {
-			logger.Error(ctx, err)
-		}
 
 		if keysValue := s.modelKeysCache.GetVal(ctx, id); keysValue != nil {
 

@@ -81,6 +81,7 @@ var (
 						moderation.NewV1(),
 						file.NewV1(),
 						anthropic.NewV1(),
+						//openai.NewV1(),
 					)
 				})
 
@@ -238,8 +239,9 @@ func middlewareHandlerResponse(r *ghttp.Request) {
 
 		msg = err.Error()
 
-		if gstr.Contains(msg, "timeout") || gstr.Contains(msg, "tcp") || gstr.Contains(msg, "http") || gstr.Contains(msg, "connection") {
-			msg = "Internal Error."
+		if gstr.Contains(msg, "timeout") || gstr.Contains(msg, "tcp") || gstr.Contains(msg, "http") ||
+			gstr.Contains(msg, "connection") || gstr.Contains(msg, "failed") {
+			msg = "The server is busy, please try again later"
 		}
 
 	} else {

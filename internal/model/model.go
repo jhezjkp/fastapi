@@ -13,7 +13,7 @@ type Model struct {
 	IsEnablePresetConfig bool                        `json:"is_enable_preset_config,omitempty"` // 是否启用预设配置
 	PresetConfig         common.PresetConfig         `json:"preset_config,omitempty"`           // 预设配置
 	TextQuota            common.TextQuota            `json:"text_quota,omitempty"`              // 文本额度
-	ImageQuotas          []common.ImageQuota         `json:"image_quotas,omitempty"`            // 图像额度
+	ImageQuota           common.ImageQuota           `json:"image_quota,omitempty"`             // 图像额度
 	AudioQuota           common.AudioQuota           `json:"audio_quota,omitempty"`             // 音频额度
 	MultimodalQuota      common.MultimodalQuota      `json:"multimodal_quota,omitempty"`        // 多模态额度
 	RealtimeQuota        common.RealtimeQuota        `json:"realtime_quota,omitempty"`          // 多模态实时额度
@@ -24,8 +24,6 @@ type Model struct {
 	IsEnableModelAgent   bool                        `json:"is_enable_model_agent,omitempty"`   // 是否启用模型代理
 	LbStrategy           int                         `json:"lb_strategy,omitempty"`             // 代理负载均衡策略[1:轮询, 2:权重]
 	ModelAgents          []string                    `json:"model_agents,omitempty"`            // 模型代理
-	ModelAgentNames      []string                    `json:"model_agent_names,omitempty"`       // 模型代理名称
-	ModelAgent           *ModelAgent                 `json:"model_agent,omitempty"`             // 模型代理信息
 	IsEnableForward      bool                        `json:"is_enable_forward,omitempty"`       // 是否启用模型转发
 	ForwardConfig        *common.ForwardConfig       `json:"forward_config,omitempty"`          // 模型转发配置
 	IsEnableFallback     bool                        `json:"is_enable_fallback,omitempty"`      // 是否启用后备

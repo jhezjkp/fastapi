@@ -19,7 +19,9 @@ import (
 	"github.com/iimeta/fastapi/internal/service"
 	"github.com/iimeta/fastapi/utility/logger"
 	"github.com/iimeta/fastapi/utility/util"
+	"github.com/iimeta/go-openai"
 	"math"
+	"slices"
 	"time"
 )
 
@@ -65,8 +67,13 @@ func (s *sAudio) Speech(ctx context.Context, params sdkm.SpeechRequest, fallback
 				totalTokens = mak.ReqModel.AudioQuota.FixedQuota
 			}
 
+			// 分组折扣
+			if mak.Group != nil && slices.Contains(mak.Group.Models, mak.ReqModel.Id) {
+				totalTokens = int(math.Ceil(float64(totalTokens) * mak.Group.Discount))
+			}
+
 			if err := grpool.Add(gctx.NeverDone(ctx), func(ctx context.Context) {
-				if err := service.Common().RecordUsage(ctx, totalTokens, mak.Key.Key); err != nil {
+				if err := service.Common().RecordUsage(ctx, totalTokens, mak.Key.Key, mak.Group); err != nil {
 					logger.Error(ctx, err)
 					panic(err)
 				}
@@ -77,8 +84,6 @@ func (s *sAudio) Speech(ctx context.Context, params sdkm.SpeechRequest, fallback
 
 		if mak.ReqModel != nil && mak.RealModel != nil {
 			if err := grpool.Add(gctx.NeverDone(ctx), func(ctx context.Context) {
-
-				mak.RealModel.ModelAgent = mak.ModelAgent
 
 				audioReq := &model.AudioReq{
 					Input: params.Input,
@@ -96,7 +101,7 @@ func (s *sAudio) Speech(ctx context.Context, params sdkm.SpeechRequest, fallback
 					audioRes.TotalTokens = totalTokens
 				}
 
-				s.SaveLog(ctx, mak.ReqModel, mak.RealModel, fallbackModelAgent, fallbackModel, mak.Key, audioReq, audioRes, retryInfo)
+				s.SaveLog(ctx, mak.Group, mak.ReqModel, mak.RealModel, mak.ModelAgent, fallbackModelAgent, fallbackModel, mak.Key, audioReq, audioRes, retryInfo)
 
 			}); err != nil {
 				logger.Error(ctx, err)
@@ -110,6 +115,16 @@ func (s *sAudio) Speech(ctx context.Context, params sdkm.SpeechRequest, fallback
 	}
 
 	request := params
+
+	if mak.ModelAgent != nil && mak.ModelAgent.IsEnableModelReplace {
+		for i, replaceModel := range mak.ModelAgent.ReplaceModels {
+			if openai.SpeechModel(replaceModel) == request.Model {
+				logger.Infof(ctx, "sAudio Speech request.Model: %s replaced %s", request.Model, mak.ModelAgent.TargetModels[i])
+				request.Model = openai.SpeechModel(mak.ModelAgent.TargetModels[i])
+				break
+			}
+		}
+	}
 
 	if client, err = common.NewClient(ctx, mak.Corp, mak.RealModel, mak.RealKey, mak.BaseUrl, mak.Path); err != nil {
 		logger.Error(ctx, err)
@@ -224,8 +239,13 @@ func (s *sAudio) Transcriptions(ctx context.Context, params *v1.TranscriptionsRe
 				totalTokens = mak.ReqModel.AudioQuota.FixedQuota
 			}
 
+			// 分组折扣
+			if mak.Group != nil && slices.Contains(mak.Group.Models, mak.ReqModel.Id) {
+				totalTokens = int(math.Ceil(float64(totalTokens) * mak.Group.Discount))
+			}
+
 			if err := grpool.Add(gctx.NeverDone(ctx), func(ctx context.Context) {
-				if err := service.Common().RecordUsage(ctx, totalTokens, mak.Key.Key); err != nil {
+				if err := service.Common().RecordUsage(ctx, totalTokens, mak.Key.Key, mak.Group); err != nil {
 					logger.Error(ctx, err)
 					panic(err)
 				}
@@ -236,8 +256,6 @@ func (s *sAudio) Transcriptions(ctx context.Context, params *v1.TranscriptionsRe
 
 		if mak.ReqModel != nil && mak.RealModel != nil {
 			if err := grpool.Add(gctx.NeverDone(ctx), func(ctx context.Context) {
-
-				mak.RealModel.ModelAgent = mak.ModelAgent
 
 				audioReq := &model.AudioReq{
 					FilePath: params.FilePath,
@@ -256,7 +274,7 @@ func (s *sAudio) Transcriptions(ctx context.Context, params *v1.TranscriptionsRe
 					audioRes.TotalTokens = totalTokens
 				}
 
-				s.SaveLog(ctx, mak.ReqModel, mak.RealModel, fallbackModelAgent, fallbackModel, mak.Key, audioReq, audioRes, retryInfo)
+				s.SaveLog(ctx, mak.Group, mak.ReqModel, mak.RealModel, mak.ModelAgent, fallbackModelAgent, fallbackModel, mak.Key, audioReq, audioRes, retryInfo)
 
 			}); err != nil {
 				logger.Error(ctx, err)
@@ -270,6 +288,17 @@ func (s *sAudio) Transcriptions(ctx context.Context, params *v1.TranscriptionsRe
 	}
 
 	request := params
+
+	if mak.ModelAgent != nil && mak.ModelAgent.IsEnableModelReplace {
+		for i, replaceModel := range mak.ModelAgent.ReplaceModels {
+			if replaceModel == request.Model {
+				logger.Infof(ctx, "sAudio Transcriptions request.Model: %s replaced %s", request.Model, mak.ModelAgent.TargetModels[i])
+				request.Model = mak.ModelAgent.TargetModels[i]
+				mak.RealModel.Model = request.Model
+				break
+			}
+		}
+	}
 
 	if client, err = common.NewClient(ctx, mak.Corp, mak.RealModel, mak.RealKey, mak.BaseUrl, mak.Path); err != nil {
 		logger.Error(ctx, err)
@@ -345,7 +374,7 @@ func (s *sAudio) Transcriptions(ctx context.Context, params *v1.TranscriptionsRe
 }
 
 // 保存日志
-func (s *sAudio) SaveLog(ctx context.Context, reqModel, realModel *model.Model, fallbackModelAgent *model.ModelAgent, fallbackModel *model.Model, key *model.Key, audioReq *model.AudioReq, audioRes *model.AudioRes, retryInfo *mcommon.Retry, retry ...int) {
+func (s *sAudio) SaveLog(ctx context.Context, group *model.Group, reqModel, realModel *model.Model, modelAgent, fallbackModelAgent *model.ModelAgent, fallbackModel *model.Model, key *model.Key, audioReq *model.AudioReq, audioRes *model.AudioRes, retryInfo *mcommon.Retry, retry ...int) {
 
 	now := gtime.TimestampMilli()
 	defer func() {
@@ -353,7 +382,12 @@ func (s *sAudio) SaveLog(ctx context.Context, reqModel, realModel *model.Model, 
 	}()
 
 	// 不记录此错误日志
-	if audioRes.Error != nil && (errors.Is(audioRes.Error, errors.ERR_MODEL_NOT_FOUND) || errors.Is(audioRes.Error, errors.ERR_MODEL_DISABLED)) {
+	if audioRes.Error != nil && (errors.Is(audioRes.Error, errors.ERR_MODEL_NOT_FOUND) ||
+		errors.Is(audioRes.Error, errors.ERR_MODEL_DISABLED) ||
+		errors.Is(audioRes.Error, errors.ERR_GROUP_NOT_FOUND) ||
+		errors.Is(audioRes.Error, errors.ERR_GROUP_DISABLED) ||
+		errors.Is(audioRes.Error, errors.ERR_GROUP_EXPIRED) ||
+		errors.Is(audioRes.Error, errors.ERR_GROUP_INSUFFICIENT_QUOTA)) {
 		return
 	}
 
@@ -376,6 +410,13 @@ func (s *sAudio) SaveLog(ctx context.Context, reqModel, realModel *model.Model, 
 		LocalIp:      util.GetLocalIp(),
 		Status:       1,
 		Host:         g.RequestFromCtx(ctx).GetHost(),
+		Rid:          service.Session().GetRid(ctx),
+	}
+
+	if group != nil {
+		audio.GroupId = group.Id
+		audio.GroupName = group.Name
+		audio.Discount = group.Discount
 	}
 
 	if reqModel != nil {
@@ -388,7 +429,6 @@ func (s *sAudio) SaveLog(ctx context.Context, reqModel, realModel *model.Model, 
 	}
 
 	if realModel != nil {
-
 		audio.IsEnablePresetConfig = realModel.IsEnablePresetConfig
 		audio.PresetConfig = realModel.PresetConfig
 		audio.IsEnableForward = realModel.IsEnableForward
@@ -397,20 +437,19 @@ func (s *sAudio) SaveLog(ctx context.Context, reqModel, realModel *model.Model, 
 		audio.RealModelId = realModel.Id
 		audio.RealModelName = realModel.Name
 		audio.RealModel = realModel.Model
+	}
 
-		if audio.IsEnableModelAgent && realModel.ModelAgent != nil {
-			audio.ModelAgentId = realModel.ModelAgent.Id
-			audio.ModelAgent = &do.ModelAgent{
-				Corp:    realModel.ModelAgent.Corp,
-				Name:    realModel.ModelAgent.Name,
-				BaseUrl: realModel.ModelAgent.BaseUrl,
-				Path:    realModel.ModelAgent.Path,
-				Weight:  realModel.ModelAgent.Weight,
-				Remark:  realModel.ModelAgent.Remark,
-				Status:  realModel.ModelAgent.Status,
-			}
+	if audio.IsEnableModelAgent && modelAgent != nil {
+		audio.ModelAgentId = modelAgent.Id
+		audio.ModelAgent = &do.ModelAgent{
+			Corp:    modelAgent.Corp,
+			Name:    modelAgent.Name,
+			BaseUrl: modelAgent.BaseUrl,
+			Path:    modelAgent.Path,
+			Weight:  modelAgent.Weight,
+			Remark:  modelAgent.Remark,
+			Status:  modelAgent.Status,
 		}
-
 	}
 
 	if fallbackModelAgent != nil {
@@ -435,7 +474,13 @@ func (s *sAudio) SaveLog(ctx context.Context, reqModel, realModel *model.Model, 
 	}
 
 	if audioRes.Error != nil {
+
 		audio.ErrMsg = audioRes.Error.Error()
+		openaiApiError := &openai.APIError{}
+		if errors.As(audioRes.Error, &openaiApiError) {
+			audio.ErrMsg = openaiApiError.Message
+		}
+
 		if common.IsAborted(audioRes.Error) {
 			audio.Status = 2
 		} else {
@@ -459,7 +504,11 @@ func (s *sAudio) SaveLog(ctx context.Context, reqModel, realModel *model.Model, 
 	}
 
 	if _, err := dao.Audio.Insert(ctx, audio); err != nil {
-		logger.Error(ctx, err)
+		logger.Errorf(ctx, "sAudio SaveLog error: %v", err)
+
+		if err.Error() == "an inserted document is too large" {
+			audioReq.Input = err.Error()
+		}
 
 		if len(retry) == 10 {
 			panic(err)
@@ -471,6 +520,6 @@ func (s *sAudio) SaveLog(ctx context.Context, reqModel, realModel *model.Model, 
 
 		logger.Errorf(ctx, "sAudio SaveLog retry: %d", len(retry))
 
-		s.SaveLog(ctx, reqModel, realModel, fallbackModelAgent, fallbackModel, key, audioReq, audioRes, retryInfo, retry...)
+		s.SaveLog(ctx, group, reqModel, realModel, modelAgent, fallbackModelAgent, fallbackModel, key, audioReq, audioRes, retryInfo, retry...)
 	}
 }
